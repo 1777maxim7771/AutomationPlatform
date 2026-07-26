@@ -1,33 +1,17 @@
 param(
     [string]$Root = "D:\AutomationPlatform",
-    [string]$ManifestUrl = "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/platform_manifest.json",
-    [switch]$NoLaunch
+    [string]$ManifestUrl = "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/platform_manifest.json"
 )
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-$RepoRaw = "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main"
+$raw = "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/INSTALLER_UI.ps1"
 $tempDir = Join-Path $env:TEMP "AutomationPlatform_Bootstrap"
-$runner = Join-Path $tempDir "BOOTSTRAP_RUNNER.ps1"
+$ui = Join-Path $tempDir "INSTALLER_UI.ps1"
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-
-Write-Host ""
-Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host " AutomationPlatform - INSTALL / UPDATE / REPAIR" -ForegroundColor Cyan
-Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host " Root: $Root"
-Write-Host " Repo: github.com/1777maxim7771/AutomationPlatform"
-Write-Host ""
-Write-Host "Downloading latest bootstrap runner from GitHub..." -ForegroundColor Yellow
-
-$url = "$RepoRaw/BOOTSTRAP_RUNNER.ps1?nocache=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
-Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $runner
-if (-not (Test-Path $runner)) { throw "BOOTSTRAP_RUNNER.ps1 was not downloaded." }
-try { Unblock-File $runner -ErrorAction SilentlyContinue } catch {}
-
-$args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$runner,'-Root',$Root,'-ManifestUrl',$ManifestUrl)
-if ($NoLaunch) { $args += '-NoLaunch' }
-
-& powershell.exe @args
+Write-Host "Downloading latest AutomationPlatform installer UI from GitHub..." -ForegroundColor Cyan
+$url = $raw + "?nocache=" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $ui
+if (-not (Test-Path $ui)) { throw "INSTALLER_UI.ps1 was not downloaded." }
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ui -DefaultRoot $Root -ManifestUrl $ManifestUrl
 exit $LASTEXITCODE
