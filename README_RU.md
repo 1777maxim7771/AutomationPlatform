@@ -3,17 +3,17 @@
 Локальный корень: `D:\AutomationPlatform`  
 Репозиторий: `1777maxim7771/AutomationPlatform`
 
-## Главный принцип
+## Главная точка входа
 
-Основная точка входа одна:
+Для первой установки, повторной проверки, обновления и ремонта используется один файл:
 
 ```text
 INSTALL_AutomationPlatform.bat
 ```
 
-Один BAT используется для первой установки, повторной проверки, обновления и ремонта. Сам BAT остаётся маленьким bootstrap-файлом и при каждом запуске получает актуальную логику из GitHub.
+BAT остаётся маленьким bootstrap-файлом и при каждом запуске получает актуальный `BOOTSTRAP_RUNNER.ps1` из GitHub. Поэтому исправления платформы и новая логика подтягиваются без ручного редактирования локального кода.
 
-## Актуальная цепочка
+## Текущая схема
 
 ```text
 INSTALL_AutomationPlatform.bat
@@ -22,160 +22,126 @@ latest BOOTSTRAP_RUNNER.ps1
         ↓
 latest platform_manifest.json
         ↓
-latest PYTHON_RUNTIME_MANAGER.ps1
+PYTHON_RUNTIME_MANAGER.ps1
         ↓
-application-local Python health / install / update / repair
+CHROME_RUNTIME_MANAGER.ps1
         ↓
-latest INSTALLER_CORE.ps1
+подготовка пакета Control Center
         ↓
-Chrome / Profile / Control Center / Launchers
+INSTALLER_CORE.ps1
         ↓
-final Health Check
+финальная Health Check
         ↓
 Control Center
 ```
 
-Здоровые компоненты получают `SKIP`. Отсутствующие — `INSTALL`, устаревшие — `UPDATE`, повреждённые — `REPAIR`.
+Здоровые компоненты получают `SKIP`. Отсутствующие компоненты получают `INSTALL`, устаревшие — `UPDATE`, повреждённые — `REPAIR`.
 
-## Python — только внутри AutomationPlatform
+## Python
 
-Python находится здесь:
+Python является application-local runtime и находится только здесь:
 
 ```text
 D:\AutomationPlatform\runtime\python
 ```
 
-Для Python больше не используется обычная установка `python-*.exe` в качестве основного метода. Причина: Windows installer является зарегистрированным продуктом и при наличии той же версии Python в Windows может завершиться кодом `0`, не создав вторую копию в заданном `TargetDir`.
-
-Теперь используется официальный **PythonCore runtime ZIP**, предназначенный Python Install Manager для target/extracted runtimes:
-
-```text
-https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.zip
-```
-
-SHA-256 пакета хранится в `platform_manifest.json`.
-
-`PYTHON_RUNTIME_MANAGER.ps1` выполняет:
-
-1. проверку существующего `runtime\python\python.exe`;
-2. проверку версии;
-3. проверку `import tkinter`;
-4. проверку `python -m pip --version`;
-5. `SKIP`, если всё исправно;
-6. загрузку runtime ZIP только при необходимости;
-7. проверку SHA-256;
-8. распаковку сначала в staging-папку;
-9. полную проверку staging-runtime **до замены** рабочего Python;
-10. только после успешной проверки замену `runtime\python`;
-11. финальную проверку и rollback при неудаче.
-
-Этот способ не добавляет Python в `PATH`, не создаёт Start Menu shortcut и не регистрирует отдельную Python installation в Windows.
-
-### Логи Python
-
-```text
-D:\AutomationPlatform\logs\python_runtime_YYYYMMDD_HHMMSS.log
-D:\AutomationPlatform\logs\latest_python_runtime.log
-```
-
-При неудачной staging-проверке лог дополнительно показывает наличие:
-
-```text
-python.exe
-pythonw.exe
-Lib\tkinter\__init__.py
-DLLs\_tkinter.pyd
-tcl
-```
+Используется официальный PythonCore runtime ZIP. Проверяются `python.exe`, точная версия Python, `tkinter` и `pip`. Новый runtime сначала проверяется во временной staging-папке и только после успешной проверки активируется.
 
 ## Google Chrome
 
-Проверяются наличие официального Google Chrome, установленная версия и известная Stable-версия. Если Chrome уже подходит — `SKIP`. Если отсутствует — `INSTALL`; если устарел — `UPDATE`.
+Для Chrome используется отдельный `CHROME_RUNTIME_MANAGER.ps1`.
+
+Политика обновления:
+
+- Chrome отсутствует — установка обязательна;
+- Chrome актуален — `SKIP`;
+- новая версия доступна, но Chrome сейчас запущен — `DEFER_UPDATE`, рабочий браузер сохраняется;
+- обновление MSI завершилось ошибкой, но установленный Chrome продолжает работать — `UPDATE_FAILED_USING_EXISTING`, ошибка записывается как предупреждение и не блокирует установку AutomationPlatform;
+- только отсутствие рабочего Chrome после обязательной установки является фатальной ошибкой.
+
+Журнал Chrome:
+
+```text
+D:\AutomationPlatform\logs\latest_chrome_runtime.log
+```
+
+## Chrome Debug и стартовый сайт
+
+ChatGPT больше не является стартовым сайтом по умолчанию.
+
+Стартовый URL хранится только при явном сохранении пользователем:
+
+```text
+data\shared_values.json
+browser.start_url
+```
+
+Если `browser.start_url` отсутствует:
+
+- Control Center показывает диалог **«Какой сайт открыть?»**;
+- `START_CHROME_DEBUG.cmd` запрашивает сайт в консоли, если был запущен напрямую;
+- CLI/AI-команда `browser.start` возвращает `needs_input`, а не подставляет ChatGPT автоматически.
+
+Старое историческое значение `https://chatgpt.com/`, если оно было создано прежней версией платформы, удаляется миграцией Control Center v0.5.0.
+
+## Control Center v0.5.0
+
+Основные изменения интерфейса:
+
+- яркая тёмная динамическая тема;
+- glow/hover/press эффекты кнопок;
+- pulse-эффект для основных действий;
+- живые индикаторы Python / Chrome / CDP / Control Center;
+- отдельная карточка стартового URL браузера;
+- кнопки задать и очистить URL;
+- диалог запроса сайта перед запуском Chrome Debug, когда URL не сохранён;
+- сохранены вкладки команд, параметров, секретов, модулей и результатов.
 
 ## Chrome Profile
+
+Постоянный браузерный профиль:
 
 ```text
 D:\AutomationPlatform\browser\Chrome_Profile
 ```
 
-Профиль не удаляется при обычном обновлении. Если он существует — `SKIP / PRESERVE`.
+Он не удаляется обычным обновлением платформы. Авторизации, cookies и локальные данные браузера сохраняются.
 
-## Control Center
+## Логи
 
-Сравниваются версия в `config\platform.json`, версия в `platform_manifest.json` и наличие обязательных файлов:
-
-```text
-control_center\gui.py
-core\router.py
-```
-
-Если всё актуально — `SKIP`. При новой версии — `UPDATE`. При повреждении файлов — `INSTALL_REPAIR`.
-
-После установки launchers всегда обновляются непосредственно из GitHub, поэтому старая копия launcher внутри ZIP не должна откатывать исправления.
-
-## Логи и диагностика
-
-Все журналы:
+Все журналы находятся здесь:
 
 ```text
 D:\AutomationPlatform\logs\
 ```
 
-Основные:
+Главные файлы:
 
 ```text
-bootstrap_YYYYMMDD_HHMMSS.log
 latest_bootstrap.log
-python_runtime_YYYYMMDD_HHMMSS.log
 latest_python_runtime.log
+latest_chrome_runtime.log
 install_YYYYMMDD_HHMMSS.log
+bootstrap_YYYYMMDD_HHMMSS.log
+python_runtime_YYYYMMDD_HHMMSS.log
+chrome_runtime_YYYYMMDD_HHMMSS.log
 ```
 
-Состояние платформы:
+Состояние компонентов сохраняется в:
 
 ```text
 D:\AutomationPlatform\data\platform_status.json
 ```
 
-## Основные файлы GitHub
+## Обновление
 
-| Файл | Назначение |
-|---|---|
-| `INSTALL_AutomationPlatform.bat` | единый старт Install / Update / Repair |
-| `BOOTSTRAP_RUNNER.ps1` | получает свежую логику и управляет последовательностью |
-| `PYTHON_RUNTIME_MANAGER.ps1` | независимый application-local Python runtime |
-| `INSTALLER_CORE.ps1` | Chrome / Profile / Control Center / launchers / Health Check |
-| `platform_manifest.json` | версии, URL, hashes и правила |
-| `START_CONTROL_CENTER.cmd` | запуск Control Center |
-| `START_CHROME_DEBUG.cmd` | запуск Chrome Debug / CDP |
-| `UPDATE_PLATFORM.cmd` | повторный запуск того же механизма |
-| `REPAIR_PYTHON_RUNTIME.ps1` | ручной аварийный вызов Python Runtime Manager |
-
-## Первый запуск
-
-Скачайте только:
-
-```text
-INSTALL_AutomationPlatform.bat
-```
-
-и запустите. По умолчанию:
-
-```text
-D:\AutomationPlatform
-```
-
-## Повторный запуск
-
-Можно снова запустить тот же BAT или:
+Можно повторно запустить тот же `INSTALL_AutomationPlatform.bat` либо:
 
 ```cmd
 D:\AutomationPlatform\UPDATE_PLATFORM.cmd
 ```
 
-BAT каждый раз получает новую bootstrap-логику с GitHub, поэтому исправления установщика не требуют ручного редактирования локального кода.
-
-## Пользовательские данные, которые сохраняются
+Пользовательские данные, которые сохраняются при обновлении:
 
 ```text
 browser\Chrome_Profile
