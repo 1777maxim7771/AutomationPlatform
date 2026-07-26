@@ -58,6 +58,82 @@ function RawBase([string]$ManifestUrlValue) {
     return "$($u.Scheme)://$($u.Host)$basePath"
 }
 
+function Find-PythonExe([string]$SearchRoot) {
+    if (-not (Test-Path $SearchRoot)) { return $null }
+    $direct = Join-Path $SearchRoot "python.exe"
+    if (Test-Path $direct) { return $direct }
+    $found = Get-ChildItem -Path $SearchRoot -Filter "python.exe" -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '\\Lib\\|\\Scripts\\' } |
+        Select-Object -First 1
+    if ($found) { return $found.FullName }
+    return $null
+}
+
+function Install-PythonFull([string]$InstallerPath, [string]$TargetDir) {
+    # Remove empty target so installer is happy to create it
+    if (Test-Path $TargetDir) {
+        $items = Get-ChildItem $TargetDir -Force -ErrorAction SilentlyContinue
+        if (-not $items) {
+            Remove-Item -Force $TargetDir -ErrorAction SilentlyContinue
+        }
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $TargetDir) | Out-Null
+
+    # Official silent install layout for per-user custom directory
+    $arg = "/quiet InstallAllUsers=0 TargetDir=`"$TargetDir`" PrependPath=0 AppendPath=0 Include_launcher=0 InstallLauncherAllUsers=0 Include_test=0 Include_doc=0 Shortcuts=0 AssociateFiles=0 Include_pip=1 Include_tcltk=1 Include_tools=1"
+    Log "Python silent args: $arg"
+    $p = Start-Process -FilePath $InstallerPath -ArgumentList $arg -Wait -PassThru
+    Log "Python installer exit code: $($p.ExitCode)"
+    return $p.ExitCode
+}
+
+function Install-PythonEmbed([string]$Version, [string]$TargetDir, [string]$DownloadsDir) {
+    $embedUrl = "https://www.python.org/ftp/python/$Version/python-$Version-embed-amd64.zip"
+    $zip = Join-Path $DownloadsDir "python-$Version-embed-amd64.zip"
+    Log "Trying embeddable package: $embedUrl"
+    Download $embedUrl $zip
+
+    if (Test-Path $TargetDir) {
+        Remove-Item -Recurse -Force $TargetDir -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
+    Expand-Archive -Path $zip -DestinationPath $TargetDir -Force
+
+    # Enable site-packages in embeddable layout
+    $pth = Get-ChildItem $TargetDir -Filter "python*._pth" | Select-Object -First 1
+    if ($pth) {
+        $content = Get-Content $pth.FullName
+        $newContent = @()
+        foreach ($line in $content) {
+            if ($line -match '^#\s*import site') {
+                $newContent += 'import site'
+            } else {
+                $newContent += $line
+            }
+        }
+        if ($newContent -notcontains 'import site') {
+            $newContent += 'import site'
+        }
+        Set-Content -Path $pth.FullName -Value $newContent -Encoding ASCII
+        Log "Enabled import site in $($pth.Name)"
+    }
+
+    # Get pip via get-pip.py
+    $getPip = Join-Path $DownloadsDir "get-pip.py"
+    try {
+        Download "https://bootstrap.pypa.io/get-pip.py" $getPip
+        $py = Join-Path $TargetDir "python.exe"
+        if (Test-Path $py) {
+            Log "Installing pip into embeddable Python..."
+            & $py $getPip --no-warn-script-location 2>&1 | ForEach-Object { Log "  $_" }
+        }
+    } catch {
+        Log "WARN: get-pip failed: $($_.Exception.Message)"
+    }
+
+    return (Find-PythonExe $TargetDir)
+}
+
 try {
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
     Ensure-Log
@@ -70,14 +146,14 @@ try {
     $rawBase = RawBase $ManifestUrl
     Log "rawBase = $rawBase"
 
-    $bootstrap   = Join-Path $Root "_bootstrap"
-    $downloads   = Join-Path $bootstrap "downloads"
-    $runtime     = Join-Path $Root "runtime"
-    $pythonDir   = Join-Path $runtime "python"
-    $chromeRoot  = Join-Path $runtime "chrome"
-    $browser     = Join-Path $Root "browser"
-    $profile     = Join-Path $browser "Chrome_Profile"
-    $configDir   = Join-Path $Root "config"
+    $bootstrap    = Join-Path $Root "_bootstrap"
+    $downloads    = Join-Path $bootstrap "downloads"
+    $runtime      = Join-Path $Root "runtime"
+    $pythonDir    = Join-Path $runtime "python"
+    $chromeRoot   = Join-Path $runtime "chrome"
+    $browser      = Join-Path $Root "browser"
+    $profile      = Join-Path $browser "Chrome_Profile"
+    $configDir    = Join-Path $Root "config"
     $installerDir = Join-Path $Root "installer"
 
     foreach ($d in @(
@@ -88,59 +164,64 @@ try {
         New-Item -ItemType Directory -Force -Path $d | Out-Null
     }
 
-    $pythonExe = Join-Path $pythonDir "python.exe"
+    $pythonExe = Find-PythonExe $pythonDir
 
     # ---- Python ----
     if ($InstallPython) {
-        if (-not (Test-Path $pythonExe)) {
+        if ($pythonExe) {
+            Step "Local Python already present: $pythonExe"
+        } else {
             Step "Installing local Python $($manifest.python.version)"
-            $pyInstaller = Join-Path $downloads "python-$($manifest.python.version)-amd64.exe"
+            $ver = [string]$manifest.python.version
+            $pyInstaller = Join-Path $downloads "python-$ver-amd64.exe"
+
             try {
-                Download ([string]$manifest.python.installer_url) $pyInstaller
+                if (-not (Test-Path $pyInstaller)) {
+                    Download ([string]$manifest.python.installer_url) $pyInstaller
+                } else {
+                    Log "Reusing existing installer: $pyInstaller"
+                }
             } catch {
-                Log "Python download failed: $($_.Exception.Message)"
-                Log "Skipping local Python install. You can install Python later."
-                $InstallPython = $false
+                Log "Python full installer download failed: $($_.Exception.Message)"
             }
 
-            if ($InstallPython -and (Test-Path $pyInstaller)) {
-                if ($manifest.python.sha256) {
-                    $actual = Sha $pyInstaller
-                    $expect = ([string]$manifest.python.sha256).ToLowerInvariant()
-                    if ($actual -ne $expect) {
-                        Log "Python SHA mismatch (continuing anyway)"
-                        Log "  expected: $expect"
-                        Log "  actual:   $actual"
+            if (Test-Path $pyInstaller) {
+                $code = Install-PythonFull -InstallerPath $pyInstaller -TargetDir $pythonDir
+                Start-Sleep -Seconds 2
+                $pythonExe = Find-PythonExe $pythonDir
+
+                if (-not $pythonExe) {
+                    Log "Full installer did not place python.exe. Listing $pythonDir :"
+                    if (Test-Path $pythonDir) {
+                        Get-ChildItem $pythonDir -Recurse -ErrorAction SilentlyContinue |
+                            Select-Object -First 40 |
+                            ForEach-Object { Log ("  {0}" -f $_.FullName) }
+                    } else {
+                        Log "  (directory missing)"
                     }
                 }
-                $pyArgs = @(
-                    "/quiet",
-                    "InstallAllUsers=0",
-                    "TargetDir=$pythonDir",
-                    "PrependPath=0",
-                    "AppendPath=0",
-                    "AssociateFiles=0",
-                    "Shortcuts=0",
-                    "Include_launcher=0",
-                    "InstallLauncherAllUsers=0",
-                    "Include_doc=0",
-                    "Include_test=0",
-                    "Include_pip=1",
-                    "Include_tcltk=1",
-                    "Include_tools=1",
-                    "Include_dev=1",
-                    "Include_lib=1",
-                    "Include_exe=1"
-                )
-                Log "Running Python installer..."
-                $p = Start-Process -FilePath $pyInstaller -ArgumentList $pyArgs -Wait -PassThru
-                Log "Python installer exit code: $($p.ExitCode)"
-                if (-not (Test-Path $pythonExe)) {
-                    Log "WARNING: python.exe not found after install. Continuing without local Python."
+            }
+
+            if (-not $pythonExe) {
+                Log "Falling back to embeddable Python package..."
+                try {
+                    $pythonExe = Install-PythonEmbed -Version $ver -TargetDir $pythonDir -DownloadsDir $downloads
+                } catch {
+                    Log "Embeddable install failed: $($_.Exception.Message)"
                 }
             }
-        } else {
-            Step "Local Python already installed"
+
+            if ($pythonExe) {
+                Log "Python OK: $pythonExe"
+                try {
+                    $v = & $pythonExe --version 2>&1
+                    Log "Python version check: $v"
+                } catch {
+                    Log "WARN: python --version failed"
+                }
+            } else {
+                Log "WARNING: Python was NOT installed. Platform can still use system Python later."
+            }
         }
     }
 
@@ -163,7 +244,11 @@ try {
 
             if ($installed -ne [string]$stable.version) {
                 $zip = Join-Path $downloads "chrome-$($stable.version).zip"
-                Download ([string]$download.url) $zip
+                if (-not (Test-Path $zip)) {
+                    Download ([string]$download.url) $zip
+                } else {
+                    Log "Reusing Chrome zip: $zip"
+                }
                 $stage = Join-Path $bootstrap "chrome_stage"
                 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
                 New-Item -ItemType Directory -Force -Path $stage | Out-Null
@@ -171,7 +256,6 @@ try {
                 Get-ChildItem $chromeRoot -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
                 $srcChrome = Join-Path $stage "chrome-win64"
                 if (-not (Test-Path $srcChrome)) {
-                    # some builds nest differently
                     $srcChrome = Get-ChildItem $stage -Directory | Select-Object -First 1 | ForEach-Object { $_.FullName }
                 }
                 Copy-Item -Recurse -Force $srcChrome (Join-Path $chromeRoot "chrome-win64")
@@ -205,13 +289,17 @@ try {
         $pkg = Join-Path $downloads "ControlCenter-$($manifest.control_center.version).zip"
 
         $url = PackageUrl $ManifestUrl $manifest.control_center
-        Download $url $pkg
+        if (-not (Test-Path $pkg)) {
+            Download $url $pkg
+        } else {
+            Log "Reusing Control Center package: $pkg"
+        }
 
         if ($manifest.control_center.sha256) {
             $actual = Sha $pkg
             $expect = ([string]$manifest.control_center.sha256).ToLowerInvariant()
             if ($actual -ne $expect) {
-                Log "Control Center SHA mismatch (continuing with downloaded package)"
+                Log "Control Center SHA mismatch (continuing)"
                 Log "  expected: $expect"
                 Log "  actual:   $actual"
             } else {
@@ -232,6 +320,8 @@ try {
                 Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue
                 Copy-Item -Recurse -Force $src $dst
                 Log "Copied $name"
+            } else {
+                Log "WARN: package has no folder '$name'"
             }
         }
 
@@ -262,6 +352,10 @@ try {
         $candidate = Join-Path $chromeRoot "chrome-win64\chrome.exe"
         if (Test-Path $candidate) { $chromeExe = $candidate }
     }
+    if (-not $pythonExe) {
+        $pythonExe = Find-PythonExe $pythonDir
+        if (-not $pythonExe) { $pythonExe = Join-Path $pythonDir "python.exe" }
+    }
 
     $debugPort = 9222
     try { $debugPort = [int]$manifest.defaults.debug_port } catch {}
@@ -291,18 +385,13 @@ try {
         }
     }
 
-    $rootUpdateCmd = @"
-@echo off
-setlocal
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0installer\START_PLATFORM_INSTALLER.ps1" -DefaultRoot "%~dp0"
-endlocal
-"@
+    $rootUpdateCmd = "@echo off`r`nsetlocal`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File ""%~dp0installer\START_PLATFORM_INSTALLER.ps1"" -DefaultRoot ""%~dp0""`r`nendlocal`r`n"
     Set-Content -Encoding ASCII -Path (Join-Path $Root "UPDATE_PLATFORM.cmd") -Value $rootUpdateCmd
 
     Step "Done"
     Log "Root           : $Root"
-    Log "Python         : $pythonExe"
-    Log "Chrome         : $chromeExe"
+    Log "Python         : $pythonExe (exists=$(Test-Path $pythonExe))"
+    Log "Chrome         : $chromeExe (exists=$(Test-Path ([string]$chromeExe)))"
     Log "Chrome Profile : $profile"
     Log "Updater        : $(Join-Path $Root 'UPDATE_PLATFORM.cmd')"
     Log "Log file       : $script:LogFile"
