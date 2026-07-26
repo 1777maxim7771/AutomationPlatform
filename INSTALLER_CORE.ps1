@@ -10,7 +10,6 @@ param(
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# Strip quotes / trailing separators from -Root (avoids "path contains invalid characters")
 $Root = $Root.Trim().Trim([char]0x22, [char]0x27).TrimEnd('\', '/').Trim()
 if (-not $Root) { throw "-Root is empty after sanitization." }
 
@@ -33,9 +32,15 @@ function Step([string]$Text) { Log "[STEP] $Text" }
 
 function Download([string]$Url, [string]$Dest) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Dest) | Out-Null
-    Log "Download: $Url"
+    # Bust CDN/cache on raw.githubusercontent.com
+    $fetchUrl = $Url
+    if ($Url -match 'raw\.githubusercontent\.com') {
+        $sep = if ($Url -match '\?') { '&' } else { '?' }
+        $fetchUrl = "$Url$sep`nocache=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+    }
+    Log "Download: $fetchUrl"
     Log "      to: $Dest"
-    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Dest
+    Invoke-WebRequest -UseBasicParsing -Uri $fetchUrl -OutFile $Dest
     if (-not (Test-Path $Dest)) { throw "Download failed: $Url" }
     Log ("OK size={0} bytes" -f (Get-Item $Dest).Length)
 }
@@ -93,36 +98,22 @@ function Install-GoogleChrome([string]$DownloadsDir, [string]$InstallerUrl, [str
         $Kind = "msi"
     }
     if (-not $Kind) { $Kind = "msi" }
-
     $ext = if ($Kind -eq "msi") { "msi" } else { "exe" }
     $pkg = Join-Path $DownloadsDir "google_chrome_installer.$ext"
-    if (-not (Test-Path $pkg)) {
-        Download $InstallerUrl $pkg
-    } else {
-        Log "Reusing Google Chrome installer: $pkg"
-    }
-
+    if (-not (Test-Path $pkg)) { Download $InstallerUrl $pkg } else { Log "Reusing Google Chrome installer: $pkg" }
     Log "Installing official Google Chrome (silent)..."
     if ($Kind -eq "msi") {
         $p = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$pkg`"", "/qn", "/norestart") -Wait -PassThru
         Log "msiexec exit code: $($p.ExitCode)"
-        if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
-            throw "Google Chrome MSI install failed with exit code $($p.ExitCode)"
-        }
+        if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "Google Chrome MSI install failed with exit code $($p.ExitCode)" }
     } else {
         $p = Start-Process -FilePath $pkg -ArgumentList "/silent /install" -Wait -PassThru
         Log "Chrome exe installer exit code: $($p.ExitCode)"
-        if ($p.ExitCode -ne 0) {
-            throw "Google Chrome EXE install failed with exit code $($p.ExitCode)"
-        }
+        if ($p.ExitCode -ne 0) { throw "Google Chrome EXE install failed with exit code $($p.ExitCode)" }
     }
-
     Start-Sleep -Seconds 5
     $found = Find-SystemChrome
-    if (-not $found) {
-        Start-Sleep -Seconds 5
-        $found = Find-SystemChrome
-    }
+    if (-not $found) { Start-Sleep -Seconds 5; $found = Find-SystemChrome }
     return $found
 }
 
@@ -143,11 +134,9 @@ function Install-PythonEmbed([string]$Version, [string]$TargetDir, [string]$Down
     if (-not $GetPipUrl) { $GetPipUrl = "https://bootstrap.pypa.io/get-pip.py" }
     $zip = Join-Path $DownloadsDir "python-$Version-embed-amd64.zip"
     if (-not (Test-Path $zip)) { Download $EmbedUrl $zip } else { Log "Reusing embed package: $zip" }
-
     if (Test-Path $TargetDir) { Remove-Item -Recurse -Force $TargetDir -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
     Expand-Archive -Path $zip -DestinationPath $TargetDir -Force
-
     $pth = Get-ChildItem $TargetDir -Filter "python*._pth" | Select-Object -First 1
     if ($pth) {
         $content = Get-Content $pth.FullName
@@ -158,7 +147,6 @@ function Install-PythonEmbed([string]$Version, [string]$TargetDir, [string]$Down
         if ($newContent -notcontains 'import site') { $newContent += 'import site' }
         Set-Content -Path $pth.FullName -Value $newContent -Encoding ASCII
     }
-
     $getPip = Join-Path $DownloadsDir "get-pip.py"
     try {
         if (-not (Test-Path $getPip)) { Download $GetPipUrl $getPip }
@@ -168,7 +156,6 @@ function Install-PythonEmbed([string]$Version, [string]$TargetDir, [string]$Down
             & $py $getPip --no-warn-script-location 2>&1 | ForEach-Object { Log "  $_" }
         }
     } catch { Log "WARN: get-pip failed: $($_.Exception.Message)" }
-
     return (Find-PythonExe $TargetDir)
 }
 
@@ -214,7 +201,6 @@ try {
             $embedUrl = $null; $getPipUrl = $null
             try { $embedUrl = [string]$manifest.python.embed_url } catch {}
             try { $getPipUrl = [string]$manifest.python.get_pip_url } catch {}
-
             if ($pyMethod -eq "embed_first" -or $pyMethod -eq "embed") {
                 try { $pythonExe = Install-PythonEmbed -Version $ver -TargetDir $pythonDir -DownloadsDir $downloads -EmbedUrl $embedUrl -GetPipUrl $getPipUrl }
                 catch { Log "Embed install failed: $($_.Exception.Message)" }
@@ -238,51 +224,32 @@ try {
     Step "Resolving official Google Chrome (required)"
     $chromeExe = Find-SystemChrome
     $chromeSource = ""
-
     if ($chromeExe) {
         $chromeSource = "system"
         Log "Google Chrome found: $chromeExe"
     } else {
         Write-Host ""
-        Write-Host "============================================================" -ForegroundColor Yellow
-        Write-Host " Google Chrome is REQUIRED for AutomationPlatform." -ForegroundColor Yellow
-        Write-Host " Chrome for Testing is NOT used (banner is not acceptable)." -ForegroundColor Yellow
-        Write-Host "============================================================" -ForegroundColor Yellow
-        Write-Host ""
+        Write-Host " Google Chrome is REQUIRED. Chrome for Testing is NOT used." -ForegroundColor Yellow
         Write-Host "Install official Google Chrome now? [Y/n] " -NoNewline -ForegroundColor Cyan
-
         $answer = "Y"
-        try {
-            if ([Environment]::UserInteractive) { $answer = Read-Host }
-        } catch { $answer = "Y" }
+        try { if ([Environment]::UserInteractive) { $answer = Read-Host } } catch { $answer = "Y" }
         if ([string]::IsNullOrWhiteSpace($answer)) { $answer = "Y" }
-
-        if ($answer -notmatch '^[Yy]') {
-            throw "Installation aborted: Google Chrome is required. Install it and run UPDATE_PLATFORM.cmd again."
-        }
-
+        if ($answer -notmatch '^[Yy]') { throw "Installation aborted: Google Chrome is required." }
         $gUrl = "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi"
         $gKind = "msi"
         try { if ($manifest.chrome.google_chrome_installer_url) { $gUrl = [string]$manifest.chrome.google_chrome_installer_url } } catch {}
         try { if ($manifest.chrome.google_chrome_installer_kind) { $gKind = [string]$manifest.chrome.google_chrome_installer_kind } } catch {}
-
         $chromeExe = Install-GoogleChrome -DownloadsDir $downloads -InstallerUrl $gUrl -Kind $gKind
-        if (-not $chromeExe) {
-            throw "Google Chrome installation finished but chrome.exe was not found. Install Google Chrome manually, then re-run UPDATE_PLATFORM.cmd."
-        }
+        if (-not $chromeExe) { throw "Google Chrome installed but chrome.exe not found." }
         $chromeSource = "system-installed"
         Log "Google Chrome installed: $chromeExe"
     }
-
-    if (-not $chromeExe) {
-        throw "Google Chrome is required. Installation cannot continue."
-    }
+    if (-not $chromeExe) { throw "Google Chrome is required." }
 
     if ($CreateChromeProfile) {
         Step "Platform Chrome profile"
         New-Item -ItemType Directory -Force -Path $profile | Out-Null
         Log "Profile: $profile"
-        Log "Open START_CHROME_DEBUG.cmd once and log in to ChatGPT."
     }
 
     if ($InstallControlCenter) {
@@ -290,18 +257,15 @@ try {
         $pkg = Join-Path $downloads "ControlCenter-$($manifest.control_center.version).zip"
         $url = PackageUrl $ManifestUrl $manifest.control_center
         if (-not (Test-Path $pkg)) { Download $url $pkg } else { Log "Reusing Control Center package" }
-
         if ($manifest.control_center.sha256) {
             $actual = Sha $pkg
             $expect = ([string]$manifest.control_center.sha256).ToLowerInvariant()
             if ($actual -ne $expect) { Log "SHA mismatch (continuing)" } else { Log "Control Center SHA OK" }
         }
-
         $stage = Join-Path $bootstrap "control_stage"
         Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path $stage | Out-Null
         Expand-Archive -Path $pkg -DestinationPath $stage -Force
-
         foreach ($name in @("control_center","core","commands")) {
             $src = Join-Path $stage $name; $dst = Join-Path $Root $name
             if (Test-Path $src) {
@@ -311,10 +275,7 @@ try {
             }
         }
         $autoSrc = Join-Path $stage "automation.cmd"
-        if (Test-Path $autoSrc) {
-            Copy-Item -Force $autoSrc (Join-Path $Root "automation.cmd")
-            Log "Copied automation.cmd"
-        }
+        if (Test-Path $autoSrc) { Copy-Item -Force $autoSrc (Join-Path $Root "automation.cmd"); Log "Copied automation.cmd" }
         $svSrc = Join-Path $stage "data\shared_values.json"
         $svDst = Join-Path $Root "data\shared_values.json"
         if ((Test-Path $svSrc) -and -not (Test-Path $svDst)) { Copy-Item -Force $svSrc $svDst }
@@ -362,12 +323,10 @@ try {
         } catch { Log "WARN: could not refresh $name" }
     }
     foreach ($name in $installerScripts) {
-        try {
-            Download ($rawBase + $name) (Join-Path $installerDir $name)
-        } catch { Log "WARN: could not refresh $name" }
+        try { Download ($rawBase + $name) (Join-Path $installerDir $name) }
+        catch { Log "WARN: could not refresh $name" }
     }
 
-    # Fallback if GitHub download of UPDATE_PLATFORM.cmd failed: write safe local version
     $updateCmdPath = Join-Path $Root "UPDATE_PLATFORM.cmd"
     if (-not (Test-Path $updateCmdPath)) {
         $rootUpdateCmd = @(
@@ -380,7 +339,6 @@ try {
             'endlocal'
         ) -join "`r`n"
         Set-Content -Encoding ASCII -Path $updateCmdPath -Value $rootUpdateCmd
-        Log "Wrote local fallback UPDATE_PLATFORM.cmd"
     }
 
     Step "Done"
@@ -390,8 +348,6 @@ try {
     Log "Chrome Profile : $profile"
     Log "CDP            : ${cdpHost}:$debugPort"
     Log "Control Center : $(Join-Path $Root 'START_CONTROL_CENTER.cmd')"
-    Log "Start Chrome   : $(Join-Path $Root 'START_CHROME_DEBUG.cmd')"
-    Log "Updater        : $updateCmdPath"
     Log "Log file       : $script:LogFile"
     exit 0
 }
