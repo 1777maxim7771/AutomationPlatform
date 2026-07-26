@@ -16,18 +16,15 @@ $InstallerCoreUrl = "$RepoRawBase/INSTALLER_CORE.ps1"
 function Sanitize-Path([string]$PathValue) {
     if ([string]::IsNullOrWhiteSpace($PathValue)) { return "" }
     $p = $PathValue.Trim()
-    # Remove surrounding or embedded quotes that break Windows path APIs
-    $p = $p.Trim([char]0x22, [char]0x27)  # " and '
+    $p = $p.Trim([char]0x22, [char]0x27)
     $p = $p -replace '["'']', ''
     $p = $p.Trim()
-    # Normalize trailing dots/spaces (invalid on Windows)
     $p = $p.TrimEnd('.', ' ')
     return $p
 }
 
 function Test-ValidWindowsPath([string]$PathValue) {
     if ([string]::IsNullOrWhiteSpace($PathValue)) { return $false }
-    # Drive path like D:\... or UNC \\server\share
     if ($PathValue -notmatch '^[A-Za-z]:[\\/]' -and $PathValue -notmatch '^\\\\[^\\]+\\[^\\]+') {
         return $false
     }
@@ -45,7 +42,9 @@ function Get-LatestInstallerCore {
     $dir = Split-Path -Parent $Destination
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
-    $resp = Invoke-WebRequest -UseBasicParsing -Uri $InstallerCoreUrl
+    # Cache-bust raw.githubusercontent.com so UPDATE always gets current INSTALLER_CORE
+    $url = $InstallerCoreUrl + "?nocache=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+    $resp = Invoke-WebRequest -UseBasicParsing -Uri $url
     $enc = New-Object System.Text.UTF8Encoding $true
     [System.IO.File]::WriteAllText($Destination, $resp.Content, $enc)
 
@@ -64,7 +63,6 @@ function Get-LatestLog([string]$Root) {
     return $null
 }
 
-# Clean DefaultRoot coming from UPDATE_PLATFORM.cmd (%~dp0 may include trailing \)
 $DefaultRoot = Sanitize-Path $DefaultRoot
 if ($DefaultRoot.EndsWith('\') -or $DefaultRoot.EndsWith('/')) {
     $DefaultRoot = $DefaultRoot.TrimEnd('\', '/')
@@ -73,7 +71,7 @@ if (-not $DefaultRoot) { $DefaultRoot = "D:\AutomationPlatform" }
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "AutomationPlatform - Initial Setup / Update"
-$form.Size = New-Object System.Drawing.Size(800, 625)
+$form.Size = New-Object System.Drawing.Size(800, 640)
 $form.StartPosition = "CenterScreen"
 $form.BackColor = [System.Drawing.Color]::FromArgb(18,24,32)
 $form.ForeColor = [System.Drawing.Color]::White
@@ -87,7 +85,7 @@ $title.Location = New-Object System.Drawing.Point(24, 20)
 $form.Controls.Add($title)
 
 $sub = New-Object System.Windows.Forms.Label
-$sub.Text = "Install / update local platform"
+$sub.Text = "Install / update from GitHub (self-healing)"
 $sub.ForeColor = [System.Drawing.Color]::LightGray
 $sub.AutoSize = $true
 $sub.Location = New-Object System.Drawing.Point(28, 58)
@@ -118,14 +116,14 @@ $txtManifest.Size = New-Object System.Drawing.Size(720, 28)
 $form.Controls.Add($txtManifest)
 
 $hint = New-Object System.Windows.Forms.Label
-$hint.Text = "Repository: github.com/1777maxim7771/AutomationPlatform"
+$hint.Text = "Each run downloads latest INSTALLER_CORE from GitHub (Python/tkinter/Chrome repair included)."
 $hint.ForeColor = [System.Drawing.Color]::Gray
 $hint.AutoSize = $true
 $hint.Location = New-Object System.Drawing.Point(28, 228)
 $form.Controls.Add($hint)
 
 $cbPython = New-Object System.Windows.Forms.CheckBox
-$cbPython.Text = "Local Python runtime"
+$cbPython.Text = "Local Python runtime (full + tkinter; repairs if missing)"
 $cbPython.Checked = $true
 $cbPython.AutoSize = $true
 $cbPython.Location = New-Object System.Drawing.Point(32, 274)
@@ -160,7 +158,7 @@ $cbLaunch.Location = New-Object System.Drawing.Point(32, 406)
 $form.Controls.Add($cbLaunch)
 
 $status = New-Object System.Windows.Forms.Label
-$status.Text = "Ready. Installer Core will be downloaded from GitHub."
+$status.Text = "Ready. Will download Installer Core from GitHub on start."
 $status.ForeColor = [System.Drawing.Color]::LightGray
 $status.AutoSize = $true
 $status.Location = New-Object System.Drawing.Point(32, 458)
@@ -169,7 +167,7 @@ $form.Controls.Add($status)
 $btn = New-Object System.Windows.Forms.Button
 $btn.Text = "INSTALL / UPDATE"
 $btn.Size = New-Object System.Drawing.Size(280, 46)
-$btn.Location = New-Object System.Drawing.Point(468, 500)
+$btn.Location = New-Object System.Drawing.Point(468, 510)
 $btn.BackColor = [System.Drawing.Color]::FromArgb(82,207,164)
 $btn.ForeColor = [System.Drawing.Color]::Black
 $btn.FlatStyle = "Flat"
@@ -179,8 +177,6 @@ $btn.Add_Click({
     try {
         $root = Sanitize-Path $txtRoot.Text
         $manifest = $txtManifest.Text.Trim().Trim([char]0x22, [char]0x27)
-
-        # Reflect cleaned path back into the UI
         $txtRoot.Text = $root
 
         if (-not $root) {
@@ -189,7 +185,7 @@ $btn.Add_Click({
         }
         if (-not (Test-ValidWindowsPath $root)) {
             [System.Windows.Forms.MessageBox]::Show(
-                "Invalid install path:`n$root`n`nUse a normal folder path, e.g. D:\AutomationPlatform`nDo not include quotes."
+                "Invalid install path:`n$root`n`nUse e.g. D:\AutomationPlatform without quotes."
             ) | Out-Null
             return
         }
@@ -200,14 +196,18 @@ $btn.Add_Click({
 
         New-Item -ItemType Directory -Force -Path $root | Out-Null
         New-Item -ItemType Directory -Force -Path (Join-Path $root "logs") | Out-Null
+        New-Item -ItemType Directory -Force -Path (Join-Path $root "installer") | Out-Null
 
         $tempDir = Join-Path $env:TEMP "AutomationPlatformBootstrap"
         New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
         $tempCore = Join-Path $tempDir "INSTALLER_CORE.ps1"
 
-        $status.Text = "Downloading Installer Core from GitHub..."
+        $status.Text = "Downloading latest INSTALLER_CORE from GitHub..."
         $form.Refresh()
         Get-LatestInstallerCore -Destination $tempCore
+
+        # Also keep a local copy under installer\
+        Copy-Item -Force $tempCore (Join-Path $root "installer\INSTALLER_CORE.ps1")
 
         $argList = [System.Collections.Generic.List[string]]::new()
         $argList.Add("-NoProfile")
@@ -224,7 +224,7 @@ $btn.Add_Click({
         if ($cbControl.Checked) { $argList.Add("-InstallControlCenter") }
         if ($cbProfile.Checked) { $argList.Add("-CreateChromeProfile") }
 
-        $status.Text = "Installing... watch the black console window for progress."
+        $status.Text = "Installing / repairing... watch the console window."
         $form.Refresh()
 
         $p = Start-Process -FilePath "powershell.exe" -ArgumentList $argList.ToArray() -Wait -PassThru
