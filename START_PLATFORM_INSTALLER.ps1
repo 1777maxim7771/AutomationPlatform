@@ -19,18 +19,23 @@ function Get-LatestInstallerCore {
     $dir = Split-Path -Parent $Destination
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
-    # Download as bytes and write UTF-8 with BOM so Windows PowerShell 5.1 parses Cyrillic correctly
-    $bytes = (Invoke-WebRequest -UseBasicParsing -Uri $InstallerCoreUrl).Content
-    if ($bytes -is [string]) {
-        $enc = New-Object System.Text.UTF8Encoding $true
-        [System.IO.File]::WriteAllText($Destination, $bytes, $enc)
-    } else {
-        [System.IO.File]::WriteAllBytes($Destination, $bytes)
-    }
+    $resp = Invoke-WebRequest -UseBasicParsing -Uri $InstallerCoreUrl
+    $enc = New-Object System.Text.UTF8Encoding $true
+    [System.IO.File]::WriteAllText($Destination, $resp.Content, $enc)
 
     if (-not (Test-Path $Destination)) {
         throw "Failed to download INSTALLER_CORE.ps1 from GitHub."
     }
+}
+
+function Get-LatestLog([string]$Root) {
+    $logDir = Join-Path $Root "logs"
+    if (-not (Test-Path $logDir)) { return $null }
+    $latest = Get-ChildItem $logDir -Filter "install_*.log" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($latest) { return $latest.FullName }
+    return $null
 }
 
 $form = New-Object System.Windows.Forms.Form
@@ -151,36 +156,38 @@ $btn.Add_Click({
             return
         }
 
+        New-Item -ItemType Directory -Force -Path $root | Out-Null
+        New-Item -ItemType Directory -Force -Path (Join-Path $root "logs") | Out-Null
+
         $tempCore = Join-Path $env:TEMP "AutomationPlatformBootstrap\INSTALLER_CORE.ps1"
         $status.Text = "Downloading Installer Core from GitHub..."
         $form.Refresh()
         Get-LatestInstallerCore -Destination $tempCore
 
-        # Ensure core script is UTF-8 with BOM for WinPS 5.1
-        try {
-            $raw = [System.IO.File]::ReadAllText($tempCore)
-            $utf8bom = New-Object System.Text.UTF8Encoding $true
-            [System.IO.File]::WriteAllText($tempCore, $raw, $utf8bom)
-        } catch {}
+        $switches = @()
+        if ($cbPython.Checked)  { $switches += "-InstallPython" }
+        if ($cbChrome.Checked)  { $switches += "-InstallChrome" }
+        if ($cbControl.Checked) { $switches += "-InstallControlCenter" }
+        if ($cbProfile.Checked) { $switches += "-CreateChromeProfile" }
+        $switchStr = ($switches -join " ")
 
-        $argList = @(
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-File", $tempCore,
-            "-Root", $root,
-            "-ManifestUrl", $manifest
-        )
-        if ($cbPython.Checked)  { $argList += "-InstallPython" }
-        if ($cbChrome.Checked)  { $argList += "-InstallChrome" }
-        if ($cbControl.Checked) { $argList += "-InstallControlCenter" }
-        if ($cbProfile.Checked) { $argList += "-CreateChromeProfile" }
+        # Single argument string is more reliable with Start-Process on WinPS 5.1
+        $argStr = "-NoProfile -ExecutionPolicy Bypass -File `"$tempCore`" -Root `"$root`" -ManifestUrl `"$manifest`" $switchStr"
 
-        $status.Text = "Installing... console window shows progress."
+        $status.Text = "Installing... watch the black console window for progress."
         $form.Refresh()
 
-        $p = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -Wait -PassThru
+        $p = Start-Process -FilePath "powershell.exe" -ArgumentList $argStr -Wait -PassThru
+
+        $logPath = Get-LatestLog $root
+
         if ($p.ExitCode -ne 0) {
-            throw "Installer exited with code $($p.ExitCode)."
+            $extra = ""
+            if ($logPath) {
+                $tail = Get-Content -Path $logPath -Tail 30 -ErrorAction SilentlyContinue
+                $extra = "`n`nLog: $logPath`n`n" + ($tail -join "`n")
+            }
+            throw "Installer exited with code $($p.ExitCode).$extra"
         }
 
         $status.Text = "Install finished."
@@ -192,10 +199,9 @@ $btn.Add_Click({
             }
         }
 
-        [System.Windows.Forms.MessageBox]::Show(
-            "AutomationPlatform is ready.`n`nRoot: $root",
-            "AutomationPlatform"
-        ) | Out-Null
+        $msg = "AutomationPlatform is ready.`n`nRoot: $root"
+        if ($logPath) { $msg += "`nLog: $logPath" }
+        [System.Windows.Forms.MessageBox]::Show($msg, "AutomationPlatform") | Out-Null
     }
     catch {
         $status.Text = "Error."
