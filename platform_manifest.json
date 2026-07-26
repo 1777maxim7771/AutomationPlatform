@@ -2,10 +2,29 @@
   "schema_version": 1,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
+  "repository": {
+    "owner": "1777maxim7771",
+    "name": "AutomationPlatform",
+    "branch": "main",
+    "url": "https://github.com/1777maxim7771/AutomationPlatform",
+    "raw_base": "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/"
+  },
+  "installer": {
+    "starter": "START_PLATFORM_INSTALLER.ps1",
+    "core": "INSTALLER_CORE.ps1"
+  },
   "control_center": {
     "version": "0.4.0",
-    "package_path": "packages/AutomationPlatform_ControlCenter_v0.4.0.zip",
-    "sha256": "e475de7a6f0f2b12db1f767bf30f43d17bac45ef89c6ce2e13c8ae0b92844a99"
+    "sha256": "99baaeb7246ff72689e2033fe9ce6eb4044981e1327ae1f6b17b0fe705512191",
+    "encoding": "base64-parts",
+    "package_parts": [
+      "packages/control_center_v0.4.0.part01.b64",
+      "packages/control_center_v0.4.0.part02.b64",
+      "packages/control_center_v0.4.0.part03.b64",
+      "packages/control_center_v0.4.0.part04.b64",
+      "packages/control_center_v0.4.0.part05.b64",
+      "packages/control_center_v0.4.0.part06.b64"
+    ]
   },
   "python": {
     "version": "3.13.14",
