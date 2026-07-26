@@ -11,7 +11,7 @@ if "%TARGET_ROOT:~-1%"=="\" set "TARGET_ROOT=%TARGET_ROOT:~0,-1%"
 set "REPO_RAW=https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main"
 set "MANIFEST_URL=%REPO_RAW%/platform_manifest.json"
 set "TEMP_BOOT=%TEMP%\AutomationPlatform_Bootstrap"
-set "GUI=%TEMP_BOOT%\START_PLATFORM_INSTALLER.ps1"
+set "GUI=%TEMP_BOOT%\INSTALLER_UI.ps1"
 set "LATEST_LOG=%TARGET_ROOT%\logs\latest_bootstrap.log"
 
 if not exist "%TARGET_ROOT%" mkdir "%TARGET_ROOT%" 2>nul
@@ -32,8 +32,8 @@ echo ============================================================
 echo   Root : %TARGET_ROOT%
 echo   Repo : github.com/1777maxim7771/AutomationPlatform
 echo.
-echo   1. Refresh latest lightweight GUI from GitHub
-echo   2. GUI refreshes the latest bootstrap engine
+echo   1. Refresh latest lightweight UI from GitHub
+echo   2. UI refreshes the latest bootstrap engine
 echo   3. Healthy components are skipped automatically
 echo ============================================================
 echo.
@@ -42,7 +42,7 @@ echo [UI] Downloading latest installer interface...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Stop'; "^
   "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "^
-  "$u='%REPO_RAW%/START_PLATFORM_INSTALLER.ps1?nocache=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); "^
+  "$u='%REPO_RAW%/INSTALLER_UI.ps1?nocache=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); "^
   "$d='%GUI%'; "^
   "New-Item -ItemType Directory -Force -Path (Split-Path -Parent $d) | Out-Null; "^
   "Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $d; "^
