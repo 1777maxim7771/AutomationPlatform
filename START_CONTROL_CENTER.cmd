@@ -1,5 +1,6 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
+REM AutomationPlatform START_CONTROL_CENTER.cmd v20260726c
+setlocal EnableExtensions
 cd /d "%~dp0"
 
 set "ROOT=%~dp0"
@@ -12,56 +13,31 @@ set "LOGDIR=%ROOT%\logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 
 echo ============================================================
-echo  AutomationPlatform - Control Center
+echo  AutomationPlatform - Control Center  [v20260726c]
 echo ============================================================
 echo  Root: %ROOT%
 echo.
 
-REM ---- Resolve Python ----
 set "PYTHON="
 if exist "%CONFIG%" (
   for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "try { (Get-Content -Raw '%CONFIG%' | ConvertFrom-Json).python_exe } catch {''}"`) do set "PYTHON=%%A"
 )
 if not defined PYTHON if exist "%ROOT%\runtime\python\python.exe" set "PYTHON=%ROOT%\runtime\python\python.exe"
-if not defined PYTHON (
-  where python >nul 2>&1 && for /f "delims=" %%A in ('where python') do (
-    set "PYTHON=%%A"
-    goto :py_found
-  )
-)
-:py_found
 
 if not defined PYTHON (
-  echo [ERROR] Python not found.
-  echo.
-  echo Control Center needs local Python.
-  echo Fix:
-  echo   1^) Run  %ROOT%\UPDATE_PLATFORM.cmd
-  echo   2^) Ensure checkbox "Local Python runtime" is ON
-  echo   3^) Check:  %ROOT%\runtime\python\python.exe --version
-  echo.
+  echo [ERROR] Python not found. Run UPDATE_PLATFORM.cmd
   pause
   exit /b 1
 )
-
 if not exist "%PYTHON%" (
-  echo [ERROR] python_exe path does not exist:
-  echo   %PYTHON%
-  echo.
-  echo Run UPDATE_PLATFORM.cmd to repair Python install.
+  echo [ERROR] Missing: %PYTHON%
   pause
   exit /b 1
 )
 
 echo  Python : %PYTHON%
 "%PYTHON%" --version 2>nul
-if errorlevel 1 (
-  echo [ERROR] Python failed to start.
-  pause
-  exit /b 1
-)
 
-REM ---- Resolve official Google Chrome ----
 set "CHROME="
 if exist "%CONFIG%" (
   for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "try { (Get-Content -Raw '%CONFIG%' | ConvertFrom-Json).chrome_exe } catch {''}"`) do set "CHROME=%%A"
@@ -72,48 +48,29 @@ if not defined CHROME if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.
 
 if not defined CHROME (
   echo [ERROR] Official Google Chrome not found.
-  echo Chrome for Testing is not used.
-  echo Install Google Chrome, then run UPDATE_PLATFORM.cmd
   pause
   exit /b 1
 )
 echo  Chrome : %CHROME%
-
 if not exist "%PROFILE%" mkdir "%PROFILE%"
 echo  Profile: %PROFILE%
 
-REM ---- Control Center package present? ----
 if not exist "%CC_DIR%" (
-  echo [ERROR] Folder missing: control_center\
-  echo Re-run UPDATE_PLATFORM.cmd with "Install / update Control Center" enabled.
+  echo [ERROR] Missing folder: control_center
   pause
   exit /b 1
 )
 
-REM ---- Find entry script (v0.4.0 package uses gui.py + automation_cli.py) ----
-set "ENTRY="
-for %%F in (
-  "%CC_DIR%\gui.py"
-  "%CC_DIR%\main.py"
-  "%CC_DIR%\app.py"
-  "%CC_DIR%\control_center.py"
-  "%CC_DIR%\__main__.py"
-  "%CC_DIR%\automation_cli.py"
-  "%ROOT%\core\main.py"
-  "%ROOT%\core\app.py"
-  "%ROOT%\core\gui.py"
-) do (
-  if exist %%~F if not defined ENTRY set "ENTRY=%%~F"
-)
+REM Package v0.4.0 ships gui.py + automation_cli.py
+set "ENTRY=%CC_DIR%\gui.py"
+if not exist "%ENTRY%" set "ENTRY=%CC_DIR%\automation_cli.py"
+if not exist "%ENTRY%" set "ENTRY=%CC_DIR%\main.py"
+if not exist "%ENTRY%" set "ENTRY=%CC_DIR%\app.py"
 
-if not defined ENTRY (
-  echo [ERROR] No Control Center entry script found.
-  echo Expected: control_center\gui.py  (or main.py / app.py / automation_cli.py)
-  echo.
-  echo Contents of control_center:
+if not exist "%ENTRY%" (
+  echo [ERROR] No entry script in control_center
+  echo Expected: gui.py
   dir /b "%CC_DIR%" 2>nul
-  echo.
-  echo Re-run UPDATE_PLATFORM.cmd with Control Center enabled.
   pause
   exit /b 1
 )
@@ -130,14 +87,11 @@ set "AUTOMATION_PLATFORM_PROFILE=%PROFILE%"
 
 "%PYTHON%" "%ENTRY%"
 set "RC=%ERRORLEVEL%"
-
 if not "%RC%"=="0" (
   echo.
-  echo [ERROR] Control Center exited with code %RC%
-  echo Check logs in: %LOGDIR%
+  echo [ERROR] Exit code %RC%  - see %LOGDIR%
   pause
   exit /b %RC%
 )
-
 endlocal
 exit /b 0
