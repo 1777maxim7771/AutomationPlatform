@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
   "repository": {
@@ -24,7 +24,8 @@
   },
   "python": {
     "version": "3.13.14",
-    "method": "embed_first",
+    "method": "full_first",
+    "require_tkinter": true,
     "installer_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe",
     "embed_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-embed-amd64.zip",
     "get_pip_url": "https://bootstrap.pypa.io/get-pip.py",
