@@ -11,12 +11,14 @@
 INSTALL_AutomationPlatform.bat
 ```
 
-BAT остаётся маленьким bootstrap-файлом и при каждом запуске получает актуальный `BOOTSTRAP_RUNNER.ps1` из GitHub. Поэтому исправления платформы и новая логика подтягиваются без ручного редактирования локального кода.
+BAT остаётся маленьким стабильным bootstrap-файлом. При каждом запуске он получает из GitHub **актуальный `INSTALLER_UI.ps1`**, а интерфейс уже получает актуальный `BOOTSTRAP_RUNNER.ps1`. Поэтому дизайн панели, логика установки и обновления могут меняться в репозитории без ручного редактирования локального BAT.
 
 ## Текущая схема
 
 ```text
 INSTALL_AutomationPlatform.bat
+        ↓
+latest INSTALLER_UI.ps1
         ↓
 latest BOOTSTRAP_RUNNER.ps1
         ↓
@@ -26,16 +28,34 @@ PYTHON_RUNTIME_MANAGER.ps1
         ↓
 CHROME_RUNTIME_MANAGER.ps1
         ↓
-подготовка пакета Control Center
+Control Center package/cache
         ↓
-INSTALLER_CORE.ps1
+PLATFORM_FINALIZER.ps1
         ↓
-финальная Health Check
+config / status / launchers / health check
         ↓
 Control Center
 ```
 
+`INSTALLER_CORE.ps1` сохранён только как legacy-совместимость и больше не является основным путём установки. Python и Chrome не проверяются второй раз старым Core.
+
 Здоровые компоненты получают `SKIP`. Отсутствующие компоненты получают `INSTALL`, устаревшие — `UPDATE`, повреждённые — `REPAIR`.
+
+## Лёгкий динамический Installer UI
+
+`INSTALLER_UI.ps1` использует только штатные Windows WinForms/System.Drawing и не требует отдельного UI-фреймворка.
+
+Интерфейс содержит:
+
+- объёмные кнопки с тенью;
+- hover glow;
+- видимый press/down эффект;
+- мягкий pulse-эффект основной кнопки;
+- отдельные карточки `PYTHON RUNTIME`, `GOOGLE CHROME`, `CONTROL CENTER`;
+- цветовые состояния OK / WARNING / ERROR;
+- живую полосу прогресса по 4 фазам;
+- живое чтение `logs\latest_bootstrap.log` примерно каждые 300 мс;
+- установку в отдельном скрытом процессе, поэтому окно остаётся отзывчивым и не зависает.
 
 ## Python
 
@@ -45,19 +65,23 @@ Python является application-local runtime и находится толь
 D:\AutomationPlatform\runtime\python
 ```
 
-Используется официальный PythonCore runtime ZIP. Проверяются `python.exe`, точная версия Python, `tkinter` и `pip`. Новый runtime сначала проверяется во временной staging-папке и только после успешной проверки активируется.
+Используется официальный PythonCore runtime ZIP. Проверяются `python.exe`, точная версия Python, `tkinter` и `pip`.
+
+Если текущий runtime исправен, выполняется `SKIP` и Python вообще не скачивается повторно. Если требуется установка/ремонт, уже скачанный ZIP повторно используется при совпадении SHA-256.
 
 ## Google Chrome
 
-Для Chrome используется отдельный `CHROME_RUNTIME_MANAGER.ps1`.
+Для Chrome используется только `CHROME_RUNTIME_MANAGER.ps1`.
 
 Политика обновления:
 
 - Chrome отсутствует — установка обязательна;
-- Chrome актуален — `SKIP`;
-- новая версия доступна, но Chrome сейчас запущен — `DEFER_UPDATE`, рабочий браузер сохраняется;
-- обновление MSI завершилось ошибкой, но установленный Chrome продолжает работать — `UPDATE_FAILED_USING_EXISTING`, ошибка записывается как предупреждение и не блокирует установку AutomationPlatform;
-- только отсутствие рабочего Chrome после обязательной установки является фатальной ошибкой.
+- Chrome исправен — используется существующий браузер;
+- новая версия доступна, но Chrome сейчас запущен — `DEFER_UPDATE`;
+- обновление MSI завершилось ошибкой, но установленный Chrome продолжает работать — `UPDATE_FAILED_USING_EXISTING`, платформа продолжает работу;
+- только отсутствие рабочего Chrome является фатальной ошибкой.
+
+Старый `INSTALLER_CORE.ps1` больше не повторяет Chrome version-policy после Chrome Manager.
 
 Журнал Chrome:
 
@@ -65,9 +89,19 @@ D:\AutomationPlatform\runtime\python
 D:\AutomationPlatform\logs\latest_chrome_runtime.log
 ```
 
+## Control Center package/cache
+
+Bootstrap сначала проверяет уже собранный:
+
+```text
+D:\AutomationPlatform\_bootstrap\downloads\ControlCenter-<version>.zip
+```
+
+Если SHA-256 совпадает с Manifest, части пакета с GitHub повторно не скачиваются.
+
 ## Chrome Debug и стартовый сайт
 
-ChatGPT больше не является стартовым сайтом по умолчанию.
+ChatGPT не является стартовым сайтом по умолчанию.
 
 Стартовый URL хранится только при явном сохранении пользователем:
 
@@ -76,13 +110,7 @@ data\shared_values.json
 browser.start_url
 ```
 
-Если `browser.start_url` отсутствует:
-
-- Control Center показывает диалог **«Какой сайт открыть?»**;
-- `START_CHROME_DEBUG.cmd` запрашивает сайт в консоли, если был запущен напрямую;
-- CLI/AI-команда `browser.start` возвращает `needs_input`, а не подставляет ChatGPT автоматически.
-
-Старое историческое значение `https://chatgpt.com/`, если оно было создано прежней версией платформы, удаляется миграцией Control Center v0.5.0.
+Если `browser.start_url` отсутствует, Control Center или `START_CHROME_DEBUG.cmd` спрашивает, какой сайт открыть.
 
 ## Control Center v0.5.0
 
@@ -90,11 +118,10 @@ browser.start_url
 
 - яркая тёмная динамическая тема;
 - glow/hover/press эффекты кнопок;
-- pulse-эффект для основных действий;
+- pulse-эффект основных действий;
 - живые индикаторы Python / Chrome / CDP / Control Center;
 - отдельная карточка стартового URL браузера;
-- кнопки задать и очистить URL;
-- диалог запроса сайта перед запуском Chrome Debug, когда URL не сохранён;
+- запрос сайта, когда URL не сохранён;
 - сохранены вкладки команд, параметров, секретов, модулей и результатов.
 
 ## Chrome Profile
@@ -109,25 +136,24 @@ D:\AutomationPlatform\browser\Chrome_Profile
 
 ## Логи
 
-Все журналы находятся здесь:
-
 ```text
 D:\AutomationPlatform\logs\
 ```
 
-Главные файлы:
+Основные журналы:
 
 ```text
 latest_bootstrap.log
 latest_python_runtime.log
 latest_chrome_runtime.log
-install_YYYYMMDD_HHMMSS.log
+latest_finalizer.log
 bootstrap_YYYYMMDD_HHMMSS.log
 python_runtime_YYYYMMDD_HHMMSS.log
 chrome_runtime_YYYYMMDD_HHMMSS.log
+finalizer_YYYYMMDD_HHMMSS.log
 ```
 
-Состояние компонентов сохраняется в:
+Состояние компонентов:
 
 ```text
 D:\AutomationPlatform\data\platform_status.json
