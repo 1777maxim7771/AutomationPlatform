@@ -58,10 +58,29 @@ function Prepare-ControlCenterPackage($Manifest){
     New-Item -ItemType Directory -Force -Path $downloadsDir|Out-Null
     $zipPath=Join-Path $downloadsDir "ControlCenter-$version.zip"
     $expected=([string]$Manifest.control_center.sha256).ToLowerInvariant()
+
     if((Test-Path $zipPath)-and $expected){
         $cached=(Get-FileHash -Algorithm SHA256 -Path $zipPath).Hash.ToLowerInvariant()
         if($cached -eq $expected){Log "CONTROL_CENTER PACKAGE cache valid; download skipped: $zipPath";return}
     }
+
+    # A manifest version may change because of a post-extract compatibility fix
+    # while the immutable source ZIP remains identical. Reuse any cached package
+    # whose SHA-256 matches instead of downloading all Base64 parts again.
+    if($expected){
+        foreach($candidate in (Get-ChildItem -Path $downloadsDir -Filter 'ControlCenter-*.zip' -File -ErrorAction SilentlyContinue)){
+            if($candidate.FullName -eq $zipPath){continue}
+            try{
+                $candidateSha=(Get-FileHash -Algorithm SHA256 -Path $candidate.FullName).Hash.ToLowerInvariant()
+                if($candidateSha -eq $expected){
+                    Copy-Item -Force $candidate.FullName $zipPath
+                    Log "CONTROL_CENTER PACKAGE reused matching cache: $($candidate.Name) -> $(Split-Path $zipPath -Leaf)"
+                    return
+                }
+            }catch{}
+        }
+    }
+
     $builder=New-Object System.Text.StringBuilder
     $index=0
     foreach($part in $parts){
