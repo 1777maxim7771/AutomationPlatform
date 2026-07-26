@@ -25,12 +25,23 @@ function Sha([string]$Path) {
 
 function PackageUrl([string]$ManifestUrlValue, $Item) {
     if ($Item.package_url) { return [string]$Item.package_url }
+    if (-not $Item.package_path) { throw "Manifest item has no package_url/package_path." }
     $base = [Uri]$ManifestUrlValue
     return (New-Object System.Uri($base, ([string]$Item.package_path).Replace("\","/"))).AbsoluteUri
 }
 
+function RawBase([string]$ManifestUrlValue) {
+    $u = [Uri]$ManifestUrlValue
+    $path = $u.AbsolutePath
+    $idx = $path.LastIndexOf('/')
+    if ($idx -lt 0) { throw "Cannot resolve repository raw base from Manifest URL." }
+    $basePath = $path.Substring(0, $idx + 1)
+    return "$($u.Scheme)://$($u.Host)$basePath"
+}
+
 Step "Loading manifest"
 $manifest = Invoke-RestMethod -Uri $ManifestUrl
+$rawBase = RawBase $ManifestUrl
 
 $bootstrap = Join-Path $Root "_bootstrap"
 $downloads = Join-Path $bootstrap "downloads"
@@ -59,6 +70,7 @@ if ($InstallPython) {
         Download ([string]$manifest.python.installer_url) $pyInstaller
         if ($manifest.python.sha256) {
             if ((Sha $pyInstaller) -ne ([string]$manifest.python.sha256).ToLowerInvariant()) {
+                Remove-Item -Force $pyInstaller -ErrorAction SilentlyContinue
                 throw "Python SHA-256 mismatch."
             }
         }
@@ -123,17 +135,45 @@ if ($InstallChrome) {
 }
 
 if ($CreateChromeProfile) {
-    Step "Creating Chrome Profile directory"
+    Step "Creating/preserving Chrome Profile directory"
     New-Item -ItemType Directory -Force -Path $profile | Out-Null
 }
 
 if ($InstallControlCenter) {
     Step "Installing/updating Control Center $($manifest.control_center.version)"
-    $url = PackageUrl $ManifestUrl $manifest.control_center
     $pkg = Join-Path $downloads "ControlCenter-$($manifest.control_center.version).zip"
-    Download $url $pkg
+
+    if ([string]$manifest.control_center.encoding -eq "base64-parts") {
+        if (-not $manifest.control_center.package_parts) {
+            throw "Manifest has encoding=base64-parts but package_parts is empty."
+        }
+        $builder = New-Object System.Text.StringBuilder
+        $partIndex = 0
+        foreach ($part in $manifest.control_center.package_parts) {
+            $partIndex++
+            Step "Downloading Control Center package part $partIndex/$($manifest.control_center.package_parts.Count)"
+            $partUrl = (New-Object System.Uri([Uri]$ManifestUrl, ([string]$part).Replace("\","/"))).AbsoluteUri
+            $partFile = Join-Path $downloads ("control_center_part_{0:D2}.b64" -f $partIndex)
+            Download $partUrl $partFile
+            [void]$builder.Append(((Get-Content -Raw -Encoding UTF8 $partFile) -replace "\s", ""))
+            Remove-Item -Force $partFile -ErrorAction SilentlyContinue
+        }
+        [IO.File]::WriteAllBytes($pkg, [Convert]::FromBase64String($builder.ToString()))
+    } elseif ([string]$manifest.control_center.encoding -eq "base64") {
+        $url = PackageUrl $ManifestUrl $manifest.control_center
+        $encodedPkg = $pkg + ".b64"
+        Download $url $encodedPkg
+        $encodedText = (Get-Content -Raw -Encoding UTF8 $encodedPkg) -replace "\s", ""
+        [IO.File]::WriteAllBytes($pkg, [Convert]::FromBase64String($encodedText))
+        Remove-Item -Force $encodedPkg -ErrorAction SilentlyContinue
+    } else {
+        $url = PackageUrl $ManifestUrl $manifest.control_center
+        Download $url $pkg
+    }
+
     if ($manifest.control_center.sha256) {
         if ((Sha $pkg) -ne ([string]$manifest.control_center.sha256).ToLowerInvariant()) {
+            Remove-Item -Force $pkg -ErrorAction SilentlyContinue
             throw "Control Center SHA-256 mismatch."
         }
     }
@@ -143,7 +183,6 @@ if ($InstallControlCenter) {
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
     Expand-Archive -Path $pkg -DestinationPath $stage -Force
 
-    # Program directories are replaceable. User data directories are not.
     foreach ($name in @("control_center","core","commands")) {
         $src = Join-Path $stage $name
         $dst = Join-Path $Root $name
@@ -158,7 +197,6 @@ if ($InstallControlCenter) {
         if (Test-Path $src) { Copy-Item -Force $src (Join-Path $Root $name) }
     }
 
-    # Seed files only if missing.
     if (-not (Test-Path (Join-Path $Root "data\shared_values.json"))) {
         Copy-Item -Force (Join-Path $stage "data\shared_values.json") (Join-Path $Root "data\shared_values.json")
     }
@@ -190,4 +228,27 @@ $config = [ordered]@{
 }
 $config | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 (Join-Path $configDir "platform.json")
 
+# Keep a local update launcher inside the installed platform.
+Step "Installing local platform updater"
+foreach ($name in @("START_PLATFORM_INSTALLER.ps1","INSTALLER_CORE.ps1","START_INSTALLER_GUI.cmd")) {
+    try {
+        Download ($rawBase + $name) (Join-Path $installerDir $name)
+    } catch {
+        Write-Warning "Could not refresh installer file $name : $($_.Exception.Message)"
+    }
+}
+
+$rootUpdateCmd = @"
+@echo off
+setlocal
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0installer\START_PLATFORM_INSTALLER.ps1" -DefaultRoot "%~dp0"
+endlocal
+"@
+Set-Content -Encoding ASCII -Path (Join-Path $Root "UPDATE_PLATFORM.cmd") -Value $rootUpdateCmd
+
 Step "Done"
+Write-Host "Root          : $Root" -ForegroundColor Green
+Write-Host "Python        : $pythonExe" -ForegroundColor Green
+Write-Host "Chrome        : $chromeExe" -ForegroundColor Green
+Write-Host "Chrome Profile: $profile" -ForegroundColor Green
+Write-Host "Updater       : $(Join-Path $Root 'UPDATE_PLATFORM.cmd')" -ForegroundColor Green
