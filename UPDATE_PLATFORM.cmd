@@ -2,18 +2,52 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-REM %~dp0 always ends with \  —  "D:\path\" escapes the closing quote in PowerShell.
-REM Strip the trailing backslash before passing -DefaultRoot.
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
-if not exist "%ROOT%\installer\START_PLATFORM_INSTALLER.ps1" (
-  echo [ERROR] Missing: installer\START_PLATFORM_INSTALLER.ps1
-  echo Run the bootstrap installer once, or download files from GitHub.
+set "INSTALLER=%ROOT%\installer"
+if not exist "%INSTALLER%" mkdir "%INSTALLER%"
+
+echo ============================================================
+echo  AutomationPlatform - UPDATE
+echo  Pulling latest installer from GitHub, then installing...
+echo ============================================================
+echo  Root: %ROOT%
+echo.
+
+REM Always refresh installer scripts BEFORE running them.
+REM Otherwise an old local INSTALLER_CORE skips Python/tkinter repair.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop'; "^
+  "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "^
+  "$base='https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/'; "^
+  "$t=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); "^
+  "$dest='%INSTALLER%'; "^
+  "New-Item -ItemType Directory -Force -Path $dest | Out-Null; "^
+  "@('START_PLATFORM_INSTALLER.ps1','INSTALLER_CORE.ps1','START_INSTALLER_GUI.cmd') | ForEach-Object { "^
+  "  $url = $base + $_ + '?nocache=' + $t; "^
+  "  $out = Join-Path $dest $_; "^
+  "  Write-Host ('  Download: ' + $_); "^
+  "  Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out; "^
+  "}; "^
+  "Write-Host '  Installer scripts updated.';"
+
+if errorlevel 1 (
+  echo [ERROR] Failed to download installer scripts from GitHub.
+  echo Check internet access and try again.
   pause
   exit /b 1
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\installer\START_PLATFORM_INSTALLER.ps1" -DefaultRoot "%ROOT%"
+if not exist "%INSTALLER%\START_PLATFORM_INSTALLER.ps1" (
+  echo [ERROR] Missing: installer\START_PLATFORM_INSTALLER.ps1
+  pause
+  exit /b 1
+)
+
+echo.
+echo Launching installer GUI...
+echo.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%INSTALLER%\START_PLATFORM_INSTALLER.ps1" -DefaultRoot "%ROOT%"
 set "RC=%ERRORLEVEL%"
-endlocal & exit /b %RC%
+endlocal ^& exit /b %RC%
