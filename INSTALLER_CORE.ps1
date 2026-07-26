@@ -32,7 +32,6 @@ function Step([string]$Text) { Log "[STEP] $Text" }
 
 function Download([string]$Url, [string]$Dest) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Dest) | Out-Null
-    # Bust CDN/cache on raw.githubusercontent.com
     $fetchUrl = $Url
     if ($Url -match 'raw\.githubusercontent\.com') {
         $sep = if ($Url -match '\?') { '&' } else { '?' }
@@ -74,6 +73,14 @@ function Find-PythonExe([string]$SearchRoot) {
         Select-Object -First 1
     if ($found) { return $found.FullName }
     return $null
+}
+
+function Test-Tkinter([string]$PythonPath) {
+    if (-not $PythonPath -or -not (Test-Path $PythonPath)) { return $false }
+    try {
+        $p = Start-Process -FilePath $PythonPath -ArgumentList @('-c', 'import tkinter') -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:TEMP 'ap_tk_out.txt') -RedirectStandardError (Join-Path $env:TEMP 'ap_tk_err.txt')
+        return ($p.ExitCode -eq 0)
+    } catch { return $false }
 }
 
 function Find-SystemChrome {
@@ -119,13 +126,15 @@ function Install-GoogleChrome([string]$DownloadsDir, [string]$InstallerUrl, [str
 
 function Install-PythonFull([string]$InstallerPath, [string]$TargetDir) {
     if (Test-Path $TargetDir) {
-        $items = Get-ChildItem $TargetDir -Force -ErrorAction SilentlyContinue
-        if (-not $items) { Remove-Item -Force $TargetDir -ErrorAction SilentlyContinue }
+        Log "Removing existing Python dir for clean full install: $TargetDir"
+        Remove-Item -Recurse -Force $TargetDir -ErrorAction SilentlyContinue
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $TargetDir) | Out-Null
+    # Include_tcltk=1 is required for Control Center GUI (tkinter)
     $arg = "/quiet InstallAllUsers=0 TargetDir=`"$TargetDir`" PrependPath=0 AppendPath=0 Include_launcher=0 InstallLauncherAllUsers=0 Include_test=0 Include_doc=0 Shortcuts=0 AssociateFiles=0 Include_pip=1 Include_tcltk=1 Include_tools=1"
     $p = Start-Process -FilePath $InstallerPath -ArgumentList $arg -Wait -PassThru
-    Log "Python installer exit code: $($p.ExitCode)"
+    Log "Python full installer exit code: $($p.ExitCode)"
+    Start-Sleep -Seconds 2
     return $p.ExitCode
 }
 
@@ -171,8 +180,10 @@ try {
     $rawBase = RawBase $ManifestUrl
     Log "rawBase = $rawBase"
 
-    $pyMethod = "embed_first"
+    $pyMethod = "full_first"
     try { if ($manifest.python.method) { $pyMethod = [string]$manifest.python.method } } catch {}
+    $requireTk = $true
+    try { if ($null -ne $manifest.python.require_tkinter) { $requireTk = [bool]$manifest.python.require_tkinter } } catch {}
 
     $bootstrap    = Join-Path $Root "_bootstrap"
     $downloads    = Join-Path $bootstrap "downloads"
@@ -191,33 +202,56 @@ try {
     )) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
 
     $pythonExe = Find-PythonExe $pythonDir
+    $ver = [string]$manifest.python.version
+    $embedUrl = $null; $getPipUrl = $null
+    try { $embedUrl = [string]$manifest.python.embed_url } catch {}
+    try { $getPipUrl = [string]$manifest.python.get_pip_url } catch {}
 
     if ($InstallPython) {
-        if ($pythonExe) {
-            Step "Local Python already present: $pythonExe"
-        } else {
-            Step "Installing local Python $($manifest.python.version) [method=$pyMethod]"
-            $ver = [string]$manifest.python.version
-            $embedUrl = $null; $getPipUrl = $null
-            try { $embedUrl = [string]$manifest.python.embed_url } catch {}
-            try { $getPipUrl = [string]$manifest.python.get_pip_url } catch {}
-            if ($pyMethod -eq "embed_first" -or $pyMethod -eq "embed") {
-                try { $pythonExe = Install-PythonEmbed -Version $ver -TargetDir $pythonDir -DownloadsDir $downloads -EmbedUrl $embedUrl -GetPipUrl $getPipUrl }
-                catch { Log "Embed install failed: $($_.Exception.Message)" }
+        $needInstall = -not $pythonExe
+        $needTkRepair = $false
+
+        if ($pythonExe -and $requireTk) {
+            if (Test-Tkinter $pythonExe) {
+                Step "Local Python OK with tkinter: $pythonExe"
+            } else {
+                Log "Python present but tkinter MISSING (embed build). Will reinstall full Python with Tcl/Tk."
+                $needTkRepair = $true
+                $needInstall = $true
             }
-            if (-not $pythonExe -and $pyMethod -ne "embed") {
+        }
+
+        if ($needInstall) {
+            Step "Installing local Python $ver [method=$pyMethod] (tkinter required=$requireTk)"
+
+            if ($pyMethod -eq "full_first" -or $pyMethod -eq "full" -or $needTkRepair) {
                 $pyInstaller = Join-Path $downloads "python-$ver-amd64.exe"
                 try {
                     if (-not (Test-Path $pyInstaller)) { Download ([string]$manifest.python.installer_url) $pyInstaller }
                     $null = Install-PythonFull -InstallerPath $pyInstaller -TargetDir $pythonDir
-                    Start-Sleep -Seconds 2
                     $pythonExe = Find-PythonExe $pythonDir
                 } catch { Log "Full installer failed: $($_.Exception.Message)" }
             }
+
+            if (-not $pythonExe -and $pyMethod -ne "full") {
+                try {
+                    $pythonExe = Install-PythonEmbed -Version $ver -TargetDir $pythonDir -DownloadsDir $downloads -EmbedUrl $embedUrl -GetPipUrl $getPipUrl
+                } catch { Log "Embed install failed: $($_.Exception.Message)" }
+            }
+
             if ($pythonExe) {
                 Log "Python OK: $pythonExe"
                 try { Log ("Python version: {0}" -f (& $pythonExe --version 2>&1)) } catch {}
-            } else { Log "WARNING: Python was NOT installed." }
+                if ($requireTk) {
+                    if (Test-Tkinter $pythonExe) {
+                        Log "tkinter OK"
+                    } else {
+                        Log "WARNING: tkinter still missing — Control Center GUI will fail"
+                    }
+                }
+            } else {
+                Log "WARNING: Python was NOT installed."
+            }
         }
     }
 
