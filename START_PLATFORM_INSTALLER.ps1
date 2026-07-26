@@ -18,6 +18,64 @@ function Download-Runner([string]$Destination) {
     if (-not (Test-Path $Destination)) { throw "BOOTSTRAP_RUNNER.ps1 was not downloaded." }
 }
 
+function Get-LatestInstallLog([string]$Root) {
+    $logDir = Join-Path $Root "logs"
+    if (-not (Test-Path $logDir)) { return $null }
+    return Get-ChildItem -Path $logDir -Filter "install_*.log" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+}
+
+function Get-DiagnosticText([string]$Root) {
+    $lines = New-Object System.Collections.Generic.List[string]
+    $bootstrapLog = Join-Path $Root "logs\latest_bootstrap.log"
+    if (Test-Path $bootstrapLog) {
+        $lines.Add("BOOTSTRAP LOG: $bootstrapLog")
+        $lines.Add("------------------------------------------------------------")
+        foreach ($line in (Get-Content -Path $bootstrapLog -Tail 45 -ErrorAction SilentlyContinue)) {
+            $lines.Add([string]$line)
+        }
+    } else {
+        $lines.Add("Bootstrap log was not found: $bootstrapLog")
+    }
+
+    $installLog = Get-LatestInstallLog $Root
+    if ($installLog) {
+        $lines.Add("")
+        $lines.Add("INSTALLER CORE LOG: $($installLog.FullName)")
+        $lines.Add("------------------------------------------------------------")
+        foreach ($line in (Get-Content -Path $installLog.FullName -Tail 55 -ErrorAction SilentlyContinue)) {
+            $lines.Add([string]$line)
+        }
+    }
+
+    return ($lines -join "`r`n")
+}
+
+function Show-Diagnostics([string]$Root, [string]$Title = "AutomationPlatform diagnostics") {
+    $diag = Get-DiagnosticText $Root
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = $Title
+    $dlg.Size = New-Object System.Drawing.Size(960, 680)
+    $dlg.StartPosition = "CenterParent"
+    $dlg.BackColor = [System.Drawing.Color]::FromArgb(18,24,32)
+    $dlg.ForeColor = [System.Drawing.Color]::White
+
+    $box = New-Object System.Windows.Forms.TextBox
+    $box.Multiline = $true
+    $box.ReadOnly = $true
+    $box.ScrollBars = "Both"
+    $box.WordWrap = $false
+    $box.Font = New-Object System.Drawing.Font("Consolas", 9)
+    $box.BackColor = [System.Drawing.Color]::FromArgb(10,14,20)
+    $box.ForeColor = [System.Drawing.Color]::Gainsboro
+    $box.Dock = "Fill"
+    $box.Text = $diag
+    $dlg.Controls.Add($box)
+
+    [void]$dlg.ShowDialog()
+}
+
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "AutomationPlatform - Install / Update / Repair"
 $form.Size = New-Object System.Drawing.Size(800, 500)
@@ -92,11 +150,22 @@ $btnLogs.Size = New-Object System.Drawing.Size(160, 40)
 $btnLogs.Location = New-Object System.Drawing.Point(28, 350)
 $form.Controls.Add($btnLogs)
 
+$btnDiag = New-Object System.Windows.Forms.Button
+$btnDiag.Text = "SHOW DIAGNOSTICS"
+$btnDiag.Size = New-Object System.Drawing.Size(185, 40)
+$btnDiag.Location = New-Object System.Drawing.Point(198, 350)
+$form.Controls.Add($btnDiag)
+
 $btnLogs.Add_Click({
     $root = $txtRoot.Text.Trim().Trim([char]0x22,[char]0x27).TrimEnd('\','/')
     $logs = Join-Path $root "logs"
     New-Item -ItemType Directory -Force -Path $logs | Out-Null
     Start-Process explorer.exe $logs
+})
+
+$btnDiag.Add_Click({
+    $root = $txtRoot.Text.Trim().Trim([char]0x22,[char]0x27).TrimEnd('\','/')
+    Show-Diagnostics $root
 })
 
 $btnInstall.Add_Click({
@@ -118,7 +187,18 @@ $btnInstall.Add_Click({
         $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$runner,'-Root',$root,'-ManifestUrl',$manifest)
         & powershell.exe @args
         $rc = $LASTEXITCODE
-        if ($rc -ne 0) { throw "Bootstrap failed with exit code $rc. See $root\logs\latest_bootstrap.log" }
+        if ($rc -ne 0) {
+            $status.Text = "ERROR - diagnostics opened"
+            $summary = "Bootstrap failed with exit code $rc.`n`nDetailed diagnostics will open now.`n`nLog: $root\logs\latest_bootstrap.log"
+            [System.Windows.Forms.MessageBox]::Show(
+                $summary,
+                "AutomationPlatform error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            ) | Out-Null
+            Show-Diagnostics $root "AutomationPlatform failure diagnostics"
+            return
+        }
 
         $status.Text = "Completed successfully."
         [System.Windows.Forms.MessageBox]::Show(
@@ -128,12 +208,16 @@ $btnInstall.Add_Click({
     }
     catch {
         $status.Text = "ERROR"
+        $root = $txtRoot.Text.Trim().Trim([char]0x22,[char]0x27).TrimEnd('\','/')
         [System.Windows.Forms.MessageBox]::Show(
             $_.Exception.Message,
             "AutomationPlatform error",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         ) | Out-Null
+        if ($root -and (Test-Path (Join-Path $root 'logs'))) {
+            Show-Diagnostics $root "AutomationPlatform exception diagnostics"
+        }
     }
 })
 
