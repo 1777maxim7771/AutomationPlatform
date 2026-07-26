@@ -1,4 +1,4 @@
-# Never commit local runtime/user data
+# Local runtime and user-specific data must never be committed.
 runtime/
 browser/
 data/
@@ -6,6 +6,11 @@ jobs/
 logs/
 _update/
 _bootstrap/
+installer/local/
 *.log
 .env
 *.key
+*.pem
+*.pfx
+__pycache__/
+*.pyc
