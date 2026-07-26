@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
   "repository": {
@@ -11,7 +11,11 @@
   },
   "installer": {
     "starter": "START_PLATFORM_INSTALLER.ps1",
-    "core": "INSTALLER_CORE.ps1"
+    "core": "INSTALLER_CORE.ps1",
+    "bootstrap_ps1": "INSTALL_AutomationPlatform.ps1",
+    "bootstrap_bat": "INSTALL_AutomationPlatform.bat",
+    "repair_on_rerun": true,
+    "reuse_downloads": true
   },
   "control_center": {
     "version": "0.4.0",
@@ -20,8 +24,12 @@
   },
   "python": {
     "version": "3.13.14",
+    "method": "embed_first",
     "installer_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe",
-    "sha256": "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0"
+    "embed_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-embed-amd64.zip",
+    "get_pip_url": "https://bootstrap.pypa.io/get-pip.py",
+    "sha256": "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0",
+    "note": "embed_first avoids Windows silent-installer no-op; full MSI used only as secondary attempt"
   },
   "chrome": {
     "channel": "Stable",
@@ -31,6 +39,26 @@
   "defaults": {
     "install_root": "D:\\AutomationPlatform",
     "debug_port": 9222,
-    "chrome_profile": "browser\\Chrome_Profile"
-  }
+    "cdp_host": "127.0.0.1",
+    "chrome_profile": "browser\\Chrome_Profile",
+    "python_dir": "runtime\\python",
+    "chrome_dir": "runtime\\chrome",
+    "logs_dir": "logs",
+    "modules_dir": "modules",
+    "data_dir": "data",
+    "jobs_dir": "jobs",
+    "install_python": true,
+    "install_chrome": true,
+    "install_control_center": true,
+    "create_chrome_profile": true,
+    "open_control_center_after_install": true
+  },
+  "preserve_on_update": [
+    "browser\\Chrome_Profile",
+    "data\\shared_values.json",
+    "data\\secrets.dpapi.json",
+    "modules",
+    "jobs",
+    "logs"
+  ]
 }
