@@ -1,5 +1,5 @@
 @echo off
-REM AutomationPlatform START_CONTROL_CENTER.cmd v20260726c
+REM AutomationPlatform START_CONTROL_CENTER.cmd v20260726d
 setlocal EnableExtensions
 cd /d "%~dp0"
 
@@ -10,10 +10,12 @@ set "PROFILE=%ROOT%\browser\Chrome_Profile"
 set "CONFIG=%ROOT%\config\platform.json"
 set "CC_DIR=%ROOT%\control_center"
 set "LOGDIR=%ROOT%\logs"
+set "INSTALLERDIR=%ROOT%\installer"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
+if not exist "%INSTALLERDIR%" mkdir "%INSTALLERDIR%"
 
 echo ============================================================
-echo  AutomationPlatform - Control Center  [v20260726c]
+echo  AutomationPlatform - Control Center  [v20260726d]
 echo ============================================================
 echo  Root: %ROOT%
 echo.
@@ -38,6 +40,53 @@ if not exist "%PYTHON%" (
 echo  Python : %PYTHON%
 "%PYTHON%" --version 2>nul
 
+REM -----------------------------------------------------------------
+REM Control Center GUI requires tkinter. Old/embed Python builds may
+REM contain python.exe but not Tcl/Tk. Repair the project-local runtime
+REM automatically before gui.py is started.
+REM -----------------------------------------------------------------
+"%PYTHON%" -c "import tkinter" >nul 2>&1
+if errorlevel 1 (
+  echo.
+  echo [REPAIR] tkinter is missing from the local Python runtime.
+  echo [REPAIR] Downloading the latest repair script from GitHub...
+
+  set "REPAIR=%INSTALLERDIR%\REPAIR_PYTHON_RUNTIME.ps1"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$ErrorActionPreference='Stop'; "^
+    "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "^
+    "$u='https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/REPAIR_PYTHON_RUNTIME.ps1?nocache=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); "^
+    "Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%REPAIR%'"
+
+  if errorlevel 1 (
+    echo [ERROR] Could not download Python repair script from GitHub.
+    echo         Check internet access and try UPDATE_PLATFORM.cmd
+    pause
+    exit /b 1
+  )
+
+  echo [REPAIR] Reinstalling project-local Python with Tcl/Tk...
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPAIR%" -Root "%ROOT%"
+  if errorlevel 1 (
+    echo [ERROR] Automatic Python/tkinter repair failed.
+    echo         See: %LOGDIR%
+    pause
+    exit /b 1
+  )
+
+  set "PYTHON=%ROOT%\runtime\python\python.exe"
+  "%PYTHON%" -c "import tkinter" >nul 2>&1
+  if errorlevel 1 (
+    echo [ERROR] tkinter is still unavailable after repair.
+    echo         See: %LOGDIR%
+    pause
+    exit /b 1
+  )
+
+  echo [OK] tkinter repaired successfully.
+  echo.
+)
+
 set "CHROME="
 if exist "%CONFIG%" (
   for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "try { (Get-Content -Raw '%CONFIG%' | ConvertFrom-Json).chrome_exe } catch {''}"`) do set "CHROME=%%A"
@@ -61,7 +110,6 @@ if not exist "%CC_DIR%" (
   exit /b 1
 )
 
-REM Package v0.4.0 ships gui.py + automation_cli.py
 set "ENTRY=%CC_DIR%\gui.py"
 if not exist "%ENTRY%" set "ENTRY=%CC_DIR%\automation_cli.py"
 if not exist "%ENTRY%" set "ENTRY=%CC_DIR%\main.py"
