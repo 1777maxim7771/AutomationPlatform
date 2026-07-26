@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
   "repository": {
@@ -32,7 +32,11 @@
   },
   "chrome": {
     "prefer_system_chrome": true,
-    "install_cft_if_missing": true,
+    "offer_google_chrome_if_missing": true,
+    "install_google_chrome_if_missing": true,
+    "install_cft_as_last_resort": true,
+    "google_chrome_installer_url": "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi",
+    "google_chrome_installer_kind": "msi",
     "channel": "Stable",
     "platform": "win64",
     "cft_json_url": "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json",
@@ -44,9 +48,7 @@
       "--no-default-browser-check",
       "--disable-popup-blocking"
     ],
-    "start_urls": [
-      "https://chatgpt.com"
-    ],
+    "start_urls": ["https://chatgpt.com"],
     "system_chrome_paths": [
       "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe",
       "%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe",
