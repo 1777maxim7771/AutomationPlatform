@@ -72,7 +72,7 @@ if not exist "%PROFILE%" mkdir "%PROFILE%"
 echo.
 echo ============================================================
 echo  AutomationPlatform - Chrome Debug
- echo ============================================================
+echo ============================================================
 echo  Chrome : %CHROME%
 echo  Profile: %PROFILE%
 echo  CDP    : http://127.0.0.1:%PORT%
