@@ -15,16 +15,8 @@
   },
   "control_center": {
     "version": "0.4.0",
-    "sha256": "99baaeb7246ff72689e2033fe9ce6eb4044981e1327ae1f6b17b0fe705512191",
-    "encoding": "base64-parts",
-    "package_parts": [
-      "packages/control_center_v0.4.0.part01.b64",
-      "packages/control_center_v0.4.0.part02.b64",
-      "packages/control_center_v0.4.0.part03.b64",
-      "packages/control_center_v0.4.0.part04.b64",
-      "packages/control_center_v0.4.0.part05.b64",
-      "packages/control_center_v0.4.0.part06.b64"
-    ]
+    "package_path": "packages/AutomationPlatform_ControlCenter_v0.4.0.zip",
+    "sha256": "99baaeb7246ff72689e2033fe9ce6eb4044981e1327ae1f6b17b0fe705512191"
   },
   "python": {
     "version": "3.13.14",

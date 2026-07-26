@@ -74,11 +74,11 @@ AI может использовать `D:\AutomationPlatform\commands\catalog.j
 
 ## GitHub package
 
-Control Center публикуется как:
+Control Center хранится одним готовым ZIP-пакетом:
 
-`packages/control_center_v0.4.0.part01.b64` … `part06.b64`
+`packages/AutomationPlatform_ControlCenter_v0.4.0.zip`
 
-На GitHub пакет хранится несколькими Base64-текстовыми частями, затем установщик автоматически объединяет их и локально восстанавливает ZIP. SHA-256 исходного ZIP зафиксирован в `platform_manifest.json` и проверяется до распаковки.
+Его SHA-256 записан в `platform_manifest.json` и проверяется установщиком до распаковки. Это позволяет обнаружить повреждённую или неожиданно изменённую загрузку.
 
 ## Безопасность репозитория
 
