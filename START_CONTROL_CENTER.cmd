@@ -1,5 +1,5 @@
 @echo off
-REM AutomationPlatform START_CONTROL_CENTER.cmd v20260726d
+REM AutomationPlatform START_CONTROL_CENTER.cmd v20260726e
 setlocal EnableExtensions
 cd /d "%~dp0"
 
@@ -15,7 +15,7 @@ if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 if not exist "%INSTALLERDIR%" mkdir "%INSTALLERDIR%"
 
 echo ============================================================
-echo  AutomationPlatform - Control Center  [v20260726d]
+echo  AutomationPlatform - Control Center  [v20260726e]
 echo ============================================================
 echo  Root: %ROOT%
 echo.
@@ -49,20 +49,24 @@ REM -----------------------------------------------------------------
 if errorlevel 1 (
   echo.
   echo [REPAIR] tkinter is missing from the local Python runtime.
-  echo [REPAIR] Downloading the latest repair script from GitHub...
 
   set "REPAIR=%INSTALLERDIR%\REPAIR_PYTHON_RUNTIME.ps1"
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$ErrorActionPreference='Stop'; "^
-    "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "^
-    "$u='https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/REPAIR_PYTHON_RUNTIME.ps1?nocache=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); "^
-    "Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%REPAIR%'"
+  if not exist "%REPAIR%" (
+    echo [REPAIR] Local repair helper not found. Downloading it from GitHub...
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+      "$ErrorActionPreference='Stop'; "^
+      "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "^
+      "$u='https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/REPAIR_PYTHON_RUNTIME.ps1?nocache=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); "^
+      "Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%REPAIR%'"
 
-  if errorlevel 1 (
-    echo [ERROR] Could not download Python repair script from GitHub.
-    echo         Check internet access and try UPDATE_PLATFORM.cmd
-    pause
-    exit /b 1
+    if errorlevel 1 (
+      echo [ERROR] Could not download Python repair script from GitHub.
+      echo         Check internet access and try UPDATE_PLATFORM.cmd
+      pause
+      exit /b 1
+    )
+  ) else (
+    echo [REPAIR] Using cached helper: %REPAIR%
   )
 
   echo [REPAIR] Reinstalling project-local Python with Tcl/Tk...
