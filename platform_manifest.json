@@ -1,5 +1,5 @@
 {
-  "schema_version": 9,
+  "schema_version": 10,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
   "repository": {
@@ -11,16 +11,20 @@
   },
   "installer": {
     "bootstrap_bat": "INSTALL_AutomationPlatform.bat",
+    "installer_ui": "INSTALLER_UI.ps1",
+    "legacy_ui_forwarder": "START_PLATFORM_INSTALLER.ps1",
     "bootstrap_runner": "BOOTSTRAP_RUNNER.ps1",
-    "core": "INSTALLER_CORE.ps1",
     "python_runtime_manager": "PYTHON_RUNTIME_MANAGER.ps1",
     "chrome_runtime_manager": "CHROME_RUNTIME_MANAGER.ps1",
-    "advanced_gui": "START_PLATFORM_INSTALLER.ps1",
+    "platform_finalizer": "PLATFORM_FINALIZER.ps1",
+    "legacy_core": "INSTALLER_CORE.ps1",
     "mode": "install_update_repair",
+    "always_refresh_installer_ui": true,
     "always_refresh_bootstrap_logic": true,
     "reuse_valid_downloads": true,
     "write_detailed_logs": true,
-    "write_status_json": true
+    "write_status_json": true,
+    "live_log": "logs\\latest_bootstrap.log"
   },
   "control_center": {
     "version": "0.5.0",
@@ -57,6 +61,8 @@
     "managed_update": true,
     "update_if_older_than_stable": false,
     "update_manager": "CHROME_RUNTIME_MANAGER.ps1",
+    "defer_update_while_running": true,
+    "nonfatal_update_failure_when_existing_chrome_healthy": true,
     "use_chrome_for_testing": false,
     "stable_version_url": "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json",
     "google_chrome_installer_url": "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi",
