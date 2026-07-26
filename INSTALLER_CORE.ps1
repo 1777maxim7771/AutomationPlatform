@@ -102,13 +102,25 @@ function Install-GoogleChrome([string]$DownloadsDir, [string]$InstallerUrl, [str
     if ($Kind -eq "msi") {
         $p = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$pkg`"", "/qn", "/norestart") -Wait -PassThru
         Log "msiexec exit code: $($p.ExitCode)"
+        # 0 = success, 3010 = success reboot required
+        if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+            throw "Google Chrome MSI install failed with exit code $($p.ExitCode)"
+        }
     } else {
         $p = Start-Process -FilePath $pkg -ArgumentList "/silent /install" -Wait -PassThru
         Log "Chrome exe installer exit code: $($p.ExitCode)"
+        if ($p.ExitCode -ne 0) {
+            throw "Google Chrome EXE install failed with exit code $($p.ExitCode)"
+        }
     }
 
-    Start-Sleep -Seconds 3
-    return (Find-SystemChrome)
+    Start-Sleep -Seconds 5
+    $found = Find-SystemChrome
+    if (-not $found) {
+        Start-Sleep -Seconds 5
+        $found = Find-SystemChrome
+    }
+    return $found
 }
 
 function Install-PythonFull([string]$InstallerPath, [string]$TargetDir) {
@@ -172,13 +184,6 @@ try {
     $pyMethod = "embed_first"
     try { if ($manifest.python.method) { $pyMethod = [string]$manifest.python.method } } catch {}
 
-    $preferSystemChrome = $true
-    $installGoogleIfMissing = $true
-    $installCftLastResort = $true
-    try { if ($null -ne $manifest.chrome.prefer_system_chrome) { $preferSystemChrome = [bool]$manifest.chrome.prefer_system_chrome } } catch {}
-    try { if ($null -ne $manifest.chrome.install_google_chrome_if_missing) { $installGoogleIfMissing = [bool]$manifest.chrome.install_google_chrome_if_missing } } catch {}
-    try { if ($null -ne $manifest.chrome.install_cft_as_last_resort) { $installCftLastResort = [bool]$manifest.chrome.install_cft_as_last_resort } } catch {}
-
     $bootstrap    = Join-Path $Root "_bootstrap"
     $downloads    = Join-Path $bootstrap "downloads"
     $runtime      = Join-Path $Root "runtime"
@@ -227,104 +232,48 @@ try {
         }
     }
 
-    # ---- Chrome: system first -> install Google Chrome -> CfT last resort ----
-    Step "Resolving Google Chrome"
-    $systemChrome = Find-SystemChrome
-    $cftChrome = Join-Path $chromeRoot "chrome-win64\chrome.exe"
-    $chromeExe = ""
+    # ---- Google Chrome is MANDATORY (no Chrome for Testing) ----
+    Step "Resolving official Google Chrome (required)"
+    $chromeExe = Find-SystemChrome
     $chromeSource = ""
 
-    if ($systemChrome) {
-        $chromeExe = $systemChrome
+    if ($chromeExe) {
         $chromeSource = "system"
-        Log "Google Chrome already installed: $systemChrome"
-    }
-    elseif ($InstallChrome -and $installGoogleIfMissing) {
+        Log "Google Chrome found: $chromeExe"
+    } else {
         Write-Host ""
         Write-Host "============================================================" -ForegroundColor Yellow
-        Write-Host " Google Chrome is NOT installed on this PC." -ForegroundColor Yellow
-        Write-Host " Official Google Chrome is required to avoid the" -ForegroundColor Yellow
-        Write-Host " 'Chrome for Testing' banner on websites." -ForegroundColor Yellow
+        Write-Host " Google Chrome is REQUIRED for AutomationPlatform." -ForegroundColor Yellow
+        Write-Host " Chrome for Testing is NOT used (banner is not acceptable)." -ForegroundColor Yellow
         Write-Host "============================================================" -ForegroundColor Yellow
         Write-Host ""
         Write-Host "Install official Google Chrome now? [Y/n] " -NoNewline -ForegroundColor Cyan
+
         $answer = "Y"
         try {
-            if ([Environment]::UserInteractive) {
-                $answer = Read-Host
-            }
+            if ([Environment]::UserInteractive) { $answer = Read-Host }
         } catch { $answer = "Y" }
         if ([string]::IsNullOrWhiteSpace($answer)) { $answer = "Y" }
 
-        if ($answer -match '^[Yy]') {
-            try {
-                $gUrl = $null; $gKind = "msi"
-                try { $gUrl = [string]$manifest.chrome.google_chrome_installer_url } catch {}
-                try { $gKind = [string]$manifest.chrome.google_chrome_installer_kind } catch {}
-                $systemChrome = Install-GoogleChrome -DownloadsDir $downloads -InstallerUrl $gUrl -Kind $gKind
-                if ($systemChrome) {
-                    $chromeExe = $systemChrome
-                    $chromeSource = "system-installed"
-                    Log "Google Chrome installed successfully: $systemChrome"
-                } else {
-                    Log "Google Chrome installer finished but chrome.exe not found yet."
-                    $systemChrome = Find-SystemChrome
-                    if ($systemChrome) {
-                        $chromeExe = $systemChrome
-                        $chromeSource = "system-installed"
-                    }
-                }
-            } catch {
-                Log "Google Chrome install failed: $($_.Exception.Message)"
-            }
-        } else {
-            Log "User declined Google Chrome install."
+        if ($answer -notmatch '^[Yy]') {
+            throw "Installation aborted: Google Chrome is required. Install it and run UPDATE_PLATFORM.cmd again."
         }
-    }
 
-    # CfT only as last resort (shows testing banner - avoid if possible)
-    if (-not $chromeExe -and $InstallChrome -and $installCftLastResort) {
-        Step "Last resort: Chrome for Testing (shows testing banner)"
-        try {
-            $cft = Invoke-RestMethod -Uri ([string]$manifest.chrome.cft_json_url)
-            $stable = $cft.channels.Stable
-            $platform = [string]$manifest.chrome.platform
-            $download = $stable.downloads.chrome | Where-Object { $_.platform -eq $platform } | Select-Object -First 1
-            if (-not $download) { throw "CfT package not found" }
+        $gUrl = "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi"
+        $gKind = "msi"
+        try { if ($manifest.chrome.google_chrome_installer_url) { $gUrl = [string]$manifest.chrome.google_chrome_installer_url } } catch {}
+        try { if ($manifest.chrome.google_chrome_installer_kind) { $gKind = [string]$manifest.chrome.google_chrome_installer_kind } } catch {}
 
-            $versionFile = Join-Path $chromeRoot "VERSION.txt"
-            $installed = ""
-            if (Test-Path $versionFile) { $installed = (Get-Content -Raw $versionFile).Trim() }
-            $need = ($installed -ne [string]$stable.version) -or (-not (Test-Path $cftChrome))
-
-            if ($need) {
-                $zip = Join-Path $downloads "chrome-$($stable.version).zip"
-                if (-not (Test-Path $zip)) { Download ([string]$download.url) $zip }
-                $stage = Join-Path $bootstrap "chrome_stage"
-                Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
-                New-Item -ItemType Directory -Force -Path $stage | Out-Null
-                Expand-Archive -Path $zip -DestinationPath $stage -Force
-                Get-ChildItem $chromeRoot -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-                $srcChrome = Join-Path $stage "chrome-win64"
-                if (-not (Test-Path $srcChrome)) {
-                    $srcChrome = Get-ChildItem $stage -Directory | Select-Object -First 1 | ForEach-Object { $_.FullName }
-                }
-                Copy-Item -Recurse -Force $srcChrome (Join-Path $chromeRoot "chrome-win64")
-                Set-Content -Encoding ASCII $versionFile ([string]$stable.version)
-                Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
-            }
-            if (Test-Path $cftChrome) {
-                $chromeExe = $cftChrome
-                $chromeSource = "cft"
-                Log "Using Chrome for Testing (temporary). Install Google Chrome to remove the banner."
-            }
-        } catch {
-            Log "CfT install failed: $($_.Exception.Message)"
+        $chromeExe = Install-GoogleChrome -DownloadsDir $downloads -InstallerUrl $gUrl -Kind $gKind
+        if (-not $chromeExe) {
+            throw "Google Chrome installation finished but chrome.exe was not found. Install Google Chrome manually, then re-run UPDATE_PLATFORM.cmd."
         }
+        $chromeSource = "system-installed"
+        Log "Google Chrome installed: $chromeExe"
     }
 
     if (-not $chromeExe) {
-        Log "WARNING: No Chrome available. Install Google Chrome and re-run UPDATE_PLATFORM.cmd"
+        throw "Google Chrome is required. Installation cannot continue."
     }
 
     if ($CreateChromeProfile) {
@@ -392,7 +341,6 @@ try {
         python_exe = $pythonExe
         chrome_exe = $chromeExe
         chrome_source = $chromeSource
-        chrome_cft_exe = $(if (Test-Path $cftChrome) { $cftChrome } else { "" })
         chrome_profile = $profile
         cdp_host = $cdpHost
         debug_port = $debugPort
