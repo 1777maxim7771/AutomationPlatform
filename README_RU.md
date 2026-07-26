@@ -1,128 +1,87 @@
-# AutomationPlatform Full Starter v0.5.0
+# AutomationPlatform v0.6
 
-Центральный репозиторий для развёртывания и обновления локальной платформы в:
+Локальная платформа: `D:\AutomationPlatform`
 
-`D:\AutomationPlatform`
+Репозиторий: https://github.com/1777maxim7771/AutomationPlatform
 
-## Быстрый старт
+## Быстрый старт (чистая машина)
 
-В PowerShell:
+PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/INSTALL_AutomationPlatform.ps1 | iex
 ```
 
-Или скачайте и запустите `INSTALL_AutomationPlatform.bat`.
+Или скачайте `INSTALL_AutomationPlatform.bat`.
 
-Манифест:
+## Что ставится
 
-`https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/platform_manifest.json`
+| Компонент | Примечание |
+|-----------|------------|
+| **Python full** (`runtime\python`) | С **tkinter** (Tcl/Tk). Embed без GUI не используется |
+| **Google Chrome** (системный) | Обязателен. Chrome for Testing **не** используется |
+| Профиль | `browser\Chrome_Profile` (CDP :9222) |
+| Control Center | `control_center\gui.py` |
+| CLI | `automation.cmd` |
 
-## Что устанавливается
+## Обновление уже установленной копии
 
-| Компонент | Путь | Обязателен |
-|-----------|------|------------|
-| Локальный Python (embed) | `runtime\python\python.exe` | рекомендуется |
-| **Официальный Google Chrome** | системный `chrome.exe` | **да** |
-| Debug-профиль | `browser\Chrome_Profile` | да |
-| Control Center | `control_center\`, `core\`, `commands\` | да |
-| CLI | `automation.cmd` | да |
-
-**Chrome for Testing не используется** (плашка «только для тестирования» недопустима).
-Если Google Chrome отсутствует, установщик предлагает поставить официальный Chrome.
-Отказ от установки Chrome **прерывает** развёртывание платформы.
-
-## Chrome Debug
-
-```cmd
-D:\AutomationPlatform\START_CHROME_DEBUG.cmd
-```
-
-Запускает **официальный** Google Chrome с:
-
-- `--remote-debugging-port=9222`
-- `--user-data-dir=D:\AutomationPlatform\browser\Chrome_Profile`
-
-Один раз войдите в ChatGPT в этом окне — сессия сохранится в профиле платформы.
-
-## Control Center
-
-```cmd
-D:\AutomationPlatform\START_CONTROL_CENTER.cmd
-```
-
-Лаунчер **проверяет зависимости** перед стартом:
-
-1. Python (`config\platform.json` → `runtime\python\python.exe`)
-2. Официальный Google Chrome
-3. Папка `control_center\` и entry-скрипт (`main.py` / `app.py` / …)
-
-Если чего-то нет — окно **не закрывается сразу**, показывает текст ошибки и `pause`.
-
-### Почему Control Center мог «не запускаться»
-
-| Причина | Решение |
-|---------|---------|
-| Нет `runtime\python\python.exe` | `UPDATE_PLATFORM.cmd`, включить Local Python |
-| В `platform.json` битый путь к Python/Chrome | перезапустить UPDATE |
-| Пустой/битый `control_center\` | UPDATE с галкой Control Center |
-| Двойной клик закрывает окно до чтения ошибки | запускать из `cmd` |
-
-Диагностика:
-
-```cmd
-cd /d D:\AutomationPlatform
-START_CONTROL_CENTER.cmd
-type config\platform.json
-dir runtime\python\python.exe
-dir control_center
-```
-
-## Только команды (без GUI)
-
-Платформа рассчитана и на CLI-only режим:
-
-```cmd
-D:\AutomationPlatform\automation.cmd list
-D:\AutomationPlatform\automation.cmd describe browser.start
-D:\AutomationPlatform\automation.cmd run browser.start
-D:\AutomationPlatform\automation.cmd run example.register --param site_url=https://example.com
-```
-
-Каталог: `commands\catalog.json`.
-
-## Обновление / ремонт
+### Способ 1 — рекомендуемый
 
 ```cmd
 D:\AutomationPlatform\UPDATE_PLATFORM.cmd
 ```
 
-Повторный запуск **самовосстанавливающий**:
+В окне установщика:
 
-- доставляет отсутствующий Python (embed_first);
-- требует/ставит Google Chrome;
-- обновляет Control Center и лаунчеры;
-- **не трогает** `browser\Chrome_Profile`, secrets, пользовательские modules/jobs/logs.
+- **Install root:** `D:\AutomationPlatform` (без кавычек)
+- Включены: Local Python, Google Chrome, Chrome_Profile, Control Center
+- **INSTALL / UPDATE**
 
-## Структура после установки
+Установщик сам:
 
-```text
-D:\AutomationPlatform\
-  START_CONTROL_CENTER.cmd
-  START_CHROME_DEBUG.cmd
-  UPDATE_PLATFORM.cmd
-  automation.cmd
-  config\platform.json
-  browser\Chrome_Profile\
-  runtime\python\
-  control_center\
-  core\
-  commands\
-  modules\
-  logs\
-  installer\
+1. Скачает свежие скрипты с GitHub (с anti-cache)
+2. Проверит `tkinter`; при отсутствии переустановит **полный** Python
+3. Обновит Control Center и лаунчеры
+4. **Не тронет** `browser\Chrome_Profile`, secrets, modules, jobs, logs
+
+### Способ 2 — точечно обновить один файл
+
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -UseBasicParsing -Uri ('https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/START_CONTROL_CENTER.cmd?nocache=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile 'D:\AutomationPlatform\START_CONTROL_CENTER.cmd'"
 ```
 
-## Безопасность
+Аналогично для `UPDATE_PLATFORM.cmd`, `START_CHROME_DEBUG.cmd`.
 
-Не коммитьте профили Chrome, API-ключи, токены, `.env`, runtime и пользовательские данные (см. `.gitignore`).
+### Способ 3 — принудительно обновить core установщика
+
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$b='https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/'; $t=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); Invoke-WebRequest -UseBasicParsing -Uri ($b+'INSTALLER_CORE.ps1?nocache='+$t) -OutFile 'D:\AutomationPlatform\installer\INSTALLER_CORE.ps1'; Invoke-WebRequest -UseBasicParsing -Uri ($b+'START_PLATFORM_INSTALLER.ps1?nocache='+$t) -OutFile 'D:\AutomationPlatform\installer\START_PLATFORM_INSTALLER.ps1'; Invoke-WebRequest -UseBasicParsing -Uri ($b+'UPDATE_PLATFORM.cmd?nocache='+$t) -OutFile 'D:\AutomationPlatform\UPDATE_PLATFORM.cmd'"
+```
+
+Затем снова `UPDATE_PLATFORM.cmd`.
+
+## Запуск после обновления
+
+```cmd
+D:\AutomationPlatform\runtime\python\python.exe -c "import tkinter; print('tkinter OK')"
+D:\AutomationPlatform\START_CONTROL_CENTER.cmd
+D:\AutomationPlatform\START_CHROME_DEBUG.cmd
+```
+
+В окне Control Center должно быть: `[v20260726c]` и `Entry: ...\control_center\gui.py`.
+
+## Только CLI (без GUI)
+
+```cmd
+D:\AutomationPlatform\automation.cmd list
+D:\AutomationPlatform\automation.cmd run browser.start
+```
+
+## Известные исправления в этой ветке
+
+- Путь без кавычек (`"D:\path\"` больше не ломает установку)
+- Обязательный официальный Google Chrome
+- Лаунчер ищет `gui.py`
+- Python full + проверка `tkinter`
+- Cache-bust при скачивании с raw.githubusercontent.com
