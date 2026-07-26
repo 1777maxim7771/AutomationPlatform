@@ -12,17 +12,17 @@ set "PS1_FILE=%TEMP_BOOT%\START_PLATFORM_INSTALLER.ps1"
 
 echo.
 echo ============================================================
-echo   AutomationPlatform - ustanovka s GitHub
+echo   AutomationPlatform - install from GitHub
 echo ============================================================
 echo.
-echo   Cel ustanovki : %TARGET_ROOT%
-echo   Repozitorij   : github.com/1777maxim7771/AutomationPlatform
+echo   Target : %TARGET_ROOT%
+echo   Repo   : github.com/1777maxim7771/AutomationPlatform
 echo.
 echo ------------------------------------------------------------
-echo   1. Sozdanie papki %TARGET_ROOT%
-echo   2. Zagruzka skriptov s GitHub
-echo   3. Python + Chrome + Control Center + profil
-echo   4. Instrukcii posle ustanovki
+echo   1. Create folder
+echo   2. Download installer scripts
+echo   3. Python + Chrome + Control Center + profile
+echo   4. Show next steps
 echo ------------------------------------------------------------
 echo.
 
@@ -44,7 +44,7 @@ if not exist "%TEMP_BOOT%" (
 
 echo [2/4] Download START_PLATFORM_INSTALLER.ps1 ...
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $d = Join-Path $env:TEMP 'AutomationPlatform_Bootstrap'; New-Item -ItemType Directory -Force -Path $d | Out-Null; $f = Join-Path $d 'START_PLATFORM_INSTALLER.ps1'; Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/START_PLATFORM_INSTALLER.ps1' -OutFile $f; if (Test-Path $f) { Unblock-File $f -ErrorAction SilentlyContinue; exit 0 } else { exit 1 }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $d = Join-Path $env:TEMP 'AutomationPlatform_Bootstrap'; New-Item -ItemType Directory -Force -Path $d | Out-Null; $f = Join-Path $d 'START_PLATFORM_INSTALLER.ps1'; $r = Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/START_PLATFORM_INSTALLER.ps1'; $enc = New-Object System.Text.UTF8Encoding $true; [System.IO.File]::WriteAllText($f, $r.Content, $enc); Unblock-File $f -ErrorAction SilentlyContinue; if (Test-Path $f) { exit 0 } else { exit 1 }"
 
 if errorlevel 1 (
     echo [ERROR] Download failed. Check internet / GitHub access.
@@ -60,7 +60,7 @@ if not exist "%PS1_FILE%" (
 
 echo [3/4] Starting installer GUI...
 echo       Root: %TARGET_ROOT%
-echo       Press USTANOVIT / OBNOVIT in the window.
+echo       Press INSTALL / UPDATE in the window.
 echo.
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1_FILE%" -DefaultRoot "%TARGET_ROOT%" -ManifestUrl "%MANIFEST_URL%"
