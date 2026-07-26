@@ -32,6 +32,8 @@ Control Center package/cache
         ↓
 PLATFORM_FINALIZER.ps1
         ↓
+Control Center compatibility validation
+        ↓
 config / status / launchers / health check
         ↓
 Control Center
@@ -83,12 +85,6 @@ D:\AutomationPlatform\runtime\python
 
 Старый `INSTALLER_CORE.ps1` больше не повторяет Chrome version-policy после Chrome Manager.
 
-Журнал Chrome:
-
-```text
-D:\AutomationPlatform\logs\latest_chrome_runtime.log
-```
-
 ## Control Center package/cache
 
 Bootstrap сначала проверяет уже собранный:
@@ -97,7 +93,38 @@ Bootstrap сначала проверяет уже собранный:
 D:\AutomationPlatform\_bootstrap\downloads\ControlCenter-<version>.zip
 ```
 
-Если SHA-256 совпадает с Manifest, части пакета с GitHub повторно не скачиваются.
+Если SHA-256 совпадает с Manifest, части пакета с GitHub повторно не скачиваются. При смене версии Bootstrap также умеет переиспользовать другой уже имеющийся `ControlCenter-*.zip`, если его SHA-256 полностью совпадает.
+
+## Control Center v0.5.1
+
+Версия `0.5.1` содержит hotfix кастомного `FXButton`.
+
+В предыдущей сборке визуальный класс использовал `self._w` как поле ширины кнопки. В Tkinter `_w` зарезервировано для Tcl widget path. Например, кнопка шириной `195` перезаписывала служебное значение на `"195"`, после чего операции Canvas завершались ошибкой:
+
+```text
+_tkinter.TclError: invalid command name "195"
+```
+
+`PLATFORM_FINALIZER.ps1` теперь:
+
+- находит именно блок класса `FXButton`;
+- заменяет конфликтующее пользовательское поле `_w` на `_fx_w`;
+- отдельно заменяет `_h` на `_fx_h`, если оно используется как поле высоты;
+- проверяет, что `self._w = width` больше не осталось;
+- выполняет `python -m py_compile control_center\gui.py`;
+- записывает результат patch/validation в журнал и `platform_status.json`.
+
+Hotfix запускается даже при `SKIP`, поэтому ранее установленная повреждённая копия GUI может быть исправлена следующим самообновлением.
+
+Остальные возможности Control Center:
+
+- яркая тёмная динамическая тема;
+- glow/hover/press эффекты кнопок;
+- pulse-эффект основных действий;
+- живые индикаторы Python / Chrome / CDP / Control Center;
+- отдельная карточка стартового URL браузера;
+- запрос сайта, когда URL не сохранён;
+- вкладки команд, параметров, секретов, модулей и результатов.
 
 ## Chrome Debug и стартовый сайт
 
@@ -111,18 +138,6 @@ browser.start_url
 ```
 
 Если `browser.start_url` отсутствует, Control Center или `START_CHROME_DEBUG.cmd` спрашивает, какой сайт открыть.
-
-## Control Center v0.5.0
-
-Основные изменения интерфейса:
-
-- яркая тёмная динамическая тема;
-- glow/hover/press эффекты кнопок;
-- pulse-эффект основных действий;
-- живые индикаторы Python / Chrome / CDP / Control Center;
-- отдельная карточка стартового URL браузера;
-- запрос сайта, когда URL не сохранён;
-- сохранены вкладки команд, параметров, секретов, модулей и результатов.
 
 ## Chrome Profile
 
