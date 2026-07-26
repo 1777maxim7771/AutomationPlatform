@@ -43,30 +43,56 @@ Log "Mode=INSTALL_OR_UPDATE_OR_REPAIR"
 
 try {
     $manifestFile = Join-Path $tempDir "platform_manifest.json"
+    $pythonManagerFile = Join-Path $tempDir "PYTHON_RUNTIME_MANAGER.ps1"
     $coreFile = Join-Path $tempDir "INSTALLER_CORE.ps1"
 
-    Log "Fetching latest manifest and installer core from GitHub"
+    Log "Fetching latest manifest and bootstrap components from GitHub"
     Download $ManifestUrl $manifestFile
     $manifest = Get-Content -Raw -Encoding UTF8 $manifestFile | ConvertFrom-Json
-    Log "Manifest schema=$($manifest.schema_version), ControlCenter=$($manifest.control_center.version), Python=$($manifest.python.version)"
+    Log "Manifest schema=$($manifest.schema_version), ControlCenter=$($manifest.control_center.version), Python=$($manifest.python.version), PythonMethod=$($manifest.python.method)"
 
+    Download "$RepoRaw/PYTHON_RUNTIME_MANAGER.ps1" $pythonManagerFile
     Download "$RepoRaw/INSTALLER_CORE.ps1" $coreFile
+    Copy-Item -Force $pythonManagerFile (Join-Path $installerDir "PYTHON_RUNTIME_MANAGER.ps1")
     Copy-Item -Force $coreFile (Join-Path $installerDir "INSTALLER_CORE.ps1")
     Copy-Item -Force $manifestFile (Join-Path $installerDir "platform_manifest.json")
 
+    # Python is deliberately handled BEFORE Installer Core using the official
+    # PythonCore runtime ZIP. This avoids the Windows EXE installer's global
+    # product-registration behaviour and keeps Python application-local.
+    $pyArgs = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $pythonManagerFile,
+        '-Root', $Root,
+        '-ManifestUrl', $ManifestUrl
+    )
+
+    Log "Starting application-local Python Runtime Manager"
+    & powershell.exe @pyArgs 2>&1 | ForEach-Object {
+        $text = [string]$_
+        Write-Host $text
+        Add-Content -Encoding UTF8 -Path $logFile -Value "[PYTHON-RUNTIME] $text"
+    }
+    $pyExit = $LASTEXITCODE
+    if ($pyExit -ne 0) {
+        throw "Python Runtime Manager failed with exit code $pyExit"
+    }
+
+    # Python is already healthy now. Installer Core checks it again, but it is
+    # not allowed to reinstall it through the legacy EXE path.
     $args = @(
         '-NoProfile',
         '-ExecutionPolicy', 'Bypass',
         '-File', $coreFile,
         '-Root', $Root,
         '-ManifestUrl', $ManifestUrl,
-        '-InstallPython',
         '-InstallChrome',
         '-InstallControlCenter',
         '-CreateChromeProfile'
     )
 
-    Log "Starting Installer Core"
+    Log "Starting Installer Core (Python pre-verified; legacy Python install disabled)"
     & powershell.exe @args 2>&1 | ForEach-Object {
         $text = [string]$_
         Write-Host $text
@@ -113,5 +139,7 @@ catch {
     Write-Host ""
     Write-Host "[ERROR] AutomationPlatform setup/update failed." -ForegroundColor Red
     Write-Host "Log: $logFile" -ForegroundColor Yellow
+    $pyLatest = Join-Path $logDir "latest_python_runtime.log"
+    if (Test-Path $pyLatest) { Write-Host "Python runtime log: $pyLatest" -ForegroundColor Yellow }
     exit 1
 }
