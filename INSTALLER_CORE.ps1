@@ -83,6 +83,34 @@ function Find-SystemChrome {
     return $null
 }
 
+function Install-GoogleChrome([string]$DownloadsDir, [string]$InstallerUrl, [string]$Kind) {
+    if (-not $InstallerUrl) {
+        $InstallerUrl = "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi"
+        $Kind = "msi"
+    }
+    if (-not $Kind) { $Kind = "msi" }
+
+    $ext = if ($Kind -eq "msi") { "msi" } else { "exe" }
+    $pkg = Join-Path $DownloadsDir "google_chrome_installer.$ext"
+    if (-not (Test-Path $pkg)) {
+        Download $InstallerUrl $pkg
+    } else {
+        Log "Reusing Google Chrome installer: $pkg"
+    }
+
+    Log "Installing official Google Chrome (silent)..."
+    if ($Kind -eq "msi") {
+        $p = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$pkg`"", "/qn", "/norestart") -Wait -PassThru
+        Log "msiexec exit code: $($p.ExitCode)"
+    } else {
+        $p = Start-Process -FilePath $pkg -ArgumentList "/silent /install" -Wait -PassThru
+        Log "Chrome exe installer exit code: $($p.ExitCode)"
+    }
+
+    Start-Sleep -Seconds 3
+    return (Find-SystemChrome)
+}
+
 function Install-PythonFull([string]$InstallerPath, [string]$TargetDir) {
     if (Test-Path $TargetDir) {
         $items = Get-ChildItem $TargetDir -Force -ErrorAction SilentlyContinue
@@ -90,7 +118,6 @@ function Install-PythonFull([string]$InstallerPath, [string]$TargetDir) {
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $TargetDir) | Out-Null
     $arg = "/quiet InstallAllUsers=0 TargetDir=`"$TargetDir`" PrependPath=0 AppendPath=0 Include_launcher=0 InstallLauncherAllUsers=0 Include_test=0 Include_doc=0 Shortcuts=0 AssociateFiles=0 Include_pip=1 Include_tcltk=1 Include_tools=1"
-    Log "Python silent args: $arg"
     $p = Start-Process -FilePath $InstallerPath -ArgumentList $arg -Wait -PassThru
     Log "Python installer exit code: $($p.ExitCode)"
     return $p.ExitCode
@@ -115,7 +142,6 @@ function Install-PythonEmbed([string]$Version, [string]$TargetDir, [string]$Down
         }
         if ($newContent -notcontains 'import site') { $newContent += 'import site' }
         Set-Content -Path $pth.FullName -Value $newContent -Encoding ASCII
-        Log "Enabled import site in $($pth.Name)"
     }
 
     $getPip = Join-Path $DownloadsDir "get-pip.py"
@@ -123,7 +149,7 @@ function Install-PythonEmbed([string]$Version, [string]$TargetDir, [string]$Down
         if (-not (Test-Path $getPip)) { Download $GetPipUrl $getPip }
         $py = Join-Path $TargetDir "python.exe"
         if (Test-Path $py) {
-            Log "Installing pip into embeddable Python..."
+            Log "Installing pip..."
             & $py $getPip --no-warn-script-location 2>&1 | ForEach-Object { Log "  $_" }
         }
     } catch { Log "WARN: get-pip failed: $($_.Exception.Message)" }
@@ -145,12 +171,13 @@ try {
 
     $pyMethod = "embed_first"
     try { if ($manifest.python.method) { $pyMethod = [string]$manifest.python.method } } catch {}
-    Log "Python method: $pyMethod"
 
     $preferSystemChrome = $true
+    $installGoogleIfMissing = $true
+    $installCftLastResort = $true
     try { if ($null -ne $manifest.chrome.prefer_system_chrome) { $preferSystemChrome = [bool]$manifest.chrome.prefer_system_chrome } } catch {}
-    $installCft = $true
-    try { if ($null -ne $manifest.chrome.install_cft_if_missing) { $installCft = [bool]$manifest.chrome.install_cft_if_missing } } catch {}
+    try { if ($null -ne $manifest.chrome.install_google_chrome_if_missing) { $installGoogleIfMissing = [bool]$manifest.chrome.install_google_chrome_if_missing } } catch {}
+    try { if ($null -ne $manifest.chrome.install_cft_as_last_resort) { $installCftLastResort = [bool]$manifest.chrome.install_cft_as_last_resort } } catch {}
 
     $bootstrap    = Join-Path $Root "_bootstrap"
     $downloads    = Join-Path $bootstrap "downloads"
@@ -200,27 +227,70 @@ try {
         }
     }
 
-    # ---- Chrome resolution ----
+    # ---- Chrome: system first -> install Google Chrome -> CfT last resort ----
+    Step "Resolving Google Chrome"
     $systemChrome = Find-SystemChrome
     $cftChrome = Join-Path $chromeRoot "chrome-win64\chrome.exe"
     $chromeExe = ""
     $chromeSource = ""
 
-    if ($preferSystemChrome -and $systemChrome) {
+    if ($systemChrome) {
         $chromeExe = $systemChrome
         $chromeSource = "system"
-        Log "System Google Chrome found: $systemChrome"
+        Log "Google Chrome already installed: $systemChrome"
+    }
+    elseif ($InstallChrome -and $installGoogleIfMissing) {
+        Write-Host ""
+        Write-Host "============================================================" -ForegroundColor Yellow
+        Write-Host " Google Chrome is NOT installed on this PC." -ForegroundColor Yellow
+        Write-Host " Official Google Chrome is required to avoid the" -ForegroundColor Yellow
+        Write-Host " 'Chrome for Testing' banner on websites." -ForegroundColor Yellow
+        Write-Host "============================================================" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Install official Google Chrome now? [Y/n] " -NoNewline -ForegroundColor Cyan
+        $answer = "Y"
+        try {
+            if ([Environment]::UserInteractive) {
+                $answer = Read-Host
+            }
+        } catch { $answer = "Y" }
+        if ([string]::IsNullOrWhiteSpace($answer)) { $answer = "Y" }
+
+        if ($answer -match '^[Yy]') {
+            try {
+                $gUrl = $null; $gKind = "msi"
+                try { $gUrl = [string]$manifest.chrome.google_chrome_installer_url } catch {}
+                try { $gKind = [string]$manifest.chrome.google_chrome_installer_kind } catch {}
+                $systemChrome = Install-GoogleChrome -DownloadsDir $downloads -InstallerUrl $gUrl -Kind $gKind
+                if ($systemChrome) {
+                    $chromeExe = $systemChrome
+                    $chromeSource = "system-installed"
+                    Log "Google Chrome installed successfully: $systemChrome"
+                } else {
+                    Log "Google Chrome installer finished but chrome.exe not found yet."
+                    $systemChrome = Find-SystemChrome
+                    if ($systemChrome) {
+                        $chromeExe = $systemChrome
+                        $chromeSource = "system-installed"
+                    }
+                }
+            } catch {
+                Log "Google Chrome install failed: $($_.Exception.Message)"
+            }
+        } else {
+            Log "User declined Google Chrome install."
+        }
     }
 
-    # Always try to keep CfT available as offline/automation fallback when requested
-    if ($InstallChrome -or $installCft) {
-        Step "Ensure Chrome for Testing is available (fallback binary)"
+    # CfT only as last resort (shows testing banner - avoid if possible)
+    if (-not $chromeExe -and $InstallChrome -and $installCftLastResort) {
+        Step "Last resort: Chrome for Testing (shows testing banner)"
         try {
             $cft = Invoke-RestMethod -Uri ([string]$manifest.chrome.cft_json_url)
             $stable = $cft.channels.Stable
             $platform = [string]$manifest.chrome.platform
             $download = $stable.downloads.chrome | Where-Object { $_.platform -eq $platform } | Select-Object -First 1
-            if (-not $download) { throw "CfT package not found for $platform" }
+            if (-not $download) { throw "CfT package not found" }
 
             $versionFile = Join-Path $chromeRoot "VERSION.txt"
             $installed = ""
@@ -229,7 +299,7 @@ try {
 
             if ($need) {
                 $zip = Join-Path $downloads "chrome-$($stable.version).zip"
-                if (-not (Test-Path $zip)) { Download ([string]$download.url) $zip } else { Log "Reusing CfT zip" }
+                if (-not (Test-Path $zip)) { Download ([string]$download.url) $zip }
                 $stage = Join-Path $bootstrap "chrome_stage"
                 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
                 New-Item -ItemType Directory -Force -Path $stage | Out-Null
@@ -243,30 +313,27 @@ try {
                 Set-Content -Encoding ASCII $versionFile ([string]$stable.version)
                 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
             }
-            if (Test-Path $cftChrome) { Log "Chrome for Testing OK: $cftChrome" }
+            if (Test-Path $cftChrome) {
+                $chromeExe = $cftChrome
+                $chromeSource = "cft"
+                Log "Using Chrome for Testing (temporary). Install Google Chrome to remove the banner."
+            }
         } catch {
             Log "CfT install failed: $($_.Exception.Message)"
         }
     }
 
     if (-not $chromeExe) {
-        if (Test-Path $cftChrome) {
-            $chromeExe = $cftChrome
-            $chromeSource = "cft"
-            Log "Using Chrome for Testing (no system Chrome)."
-        } else {
-            Log "WARNING: No Chrome binary available. Install Google Chrome or re-run installer."
-        }
+        Log "WARNING: No Chrome available. Install Google Chrome and re-run UPDATE_PLATFORM.cmd"
     }
 
     if ($CreateChromeProfile) {
-        Step "Platform Chrome profile (sessions/cookies for automation)"
+        Step "Platform Chrome profile"
         New-Item -ItemType Directory -Force -Path $profile | Out-Null
-        Log "Profile dir: $profile"
-        Log "NOTE: Log in to ChatGPT once via START_CHROME_DEBUG.cmd - session is stored here."
+        Log "Profile: $profile"
+        Log "Open START_CHROME_DEBUG.cmd once and log in to ChatGPT."
     }
 
-    # ---- Control Center ----
     if ($InstallControlCenter) {
         Step "Installing/updating Control Center $($manifest.control_center.version)"
         $pkg = Join-Path $downloads "ControlCenter-$($manifest.control_center.version).zip"
@@ -276,9 +343,7 @@ try {
         if ($manifest.control_center.sha256) {
             $actual = Sha $pkg
             $expect = ([string]$manifest.control_center.sha256).ToLowerInvariant()
-            if ($actual -ne $expect) {
-                Log "SHA mismatch (continuing) expected=$expect actual=$actual"
-            } else { Log "Control Center SHA OK" }
+            if ($actual -ne $expect) { Log "SHA mismatch (continuing)" } else { Log "Control Center SHA OK" }
         }
 
         $stage = Join-Path $bootstrap "control_stage"
@@ -339,7 +404,6 @@ try {
     Step "Refreshing helper scripts"
     foreach ($name in @("START_PLATFORM_INSTALLER.ps1","INSTALLER_CORE.ps1","START_INSTALLER_GUI.cmd","INSTALL_AutomationPlatform.bat","INSTALL_AutomationPlatform.ps1","START_CHROME_DEBUG.cmd")) {
         try {
-            $dest = if ($name -eq "START_CHROME_DEBUG.cmd") { Join-Path $Root $name } else { Join-Path $installerDir $name }
             if ($name -eq "START_CHROME_DEBUG.cmd") {
                 Download ($rawBase + $name) (Join-Path $Root $name)
             } else {
