@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "platform_api": 1,
+  "platform_name": "AutomationPlatform",
+  "control_center": {
+    "version": "0.4.0",
+    "package_path": "packages/AutomationPlatform_ControlCenter_v0.4.0.zip",
+    "sha256": "e475de7a6f0f2b12db1f767bf30f43d17bac45ef89c6ce2e13c8ae0b92844a99"
+  },
+  "python": {
+    "version": "3.13.14",
+    "installer_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe",
+    "sha256": "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0"
+  },
+  "chrome": {
+    "channel": "Stable",
+    "platform": "win64",
+    "cft_json_url": "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+  },
+  "defaults": {
+    "install_root": "D:\\AutomationPlatform",
+    "debug_port": 9222,
+    "chrome_profile": "browser\\Chrome_Profile"
+  }
+}
