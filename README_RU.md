@@ -1,59 +1,50 @@
 # AutomationPlatform Full Starter v0.4.0
 
-Это стартовая архитектура для `D:\AutomationPlatform`.
+Центральный репозиторий для развёртывания и обновления локальной платформы в:
 
-## Два уровня
+`D:\AutomationPlatform`
 
-### 1. START_PLATFORM_INSTALLER.ps1
-Первая графическая панель. Работает на Windows без установленного Python.
+## Быстрый старт — один файл
 
-Она устанавливает/обновляет:
+Для первоначальной установки достаточно скачать:
 
-- локальный Python 3.13.14 x64;
-- Chrome for Testing Stable;
-- Chrome Debug Profile;
-- Control Center.
+`START_PLATFORM_INSTALLER.ps1`
 
-### 2. AutomationPlatform Control Center
-После установки:
+Он уже знает основной GitHub Manifest:
+
+`https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/platform_manifest.json`
+
+При запуске стартовая панель сама скачивает актуальный `INSTALLER_CORE.ps1` с этого репозитория и затем разворачивает выбранные компоненты.
+
+## Что устанавливается
+
+- отдельный локальный Python в `D:\AutomationPlatform\runtime\python`;
+- Chrome for Testing в `D:\AutomationPlatform\runtime\chrome`;
+- постоянный Debug-профиль в `D:\AutomationPlatform\browser\Chrome_Profile`;
+- AutomationPlatform Control Center;
+- командный интерфейс `automation.cmd` для GUI, CLI, AI-агентов и будущих workflow.
+
+## Chrome Profile
+
+`browser\Chrome_Profile` создаётся только локально. Он не скачивается из GitHub и не заменяется обновлением платформы. В нём сохраняются локальные браузерные сессии и авторизации.
+
+## Control Center
+
+После установки запускается:
 
 `D:\AutomationPlatform\START_CONTROL_CENTER.cmd`
 
-В нём есть:
+В Control Center предусмотрены:
 
-- Главная;
-- динамические команды;
+- состояние Python / Chrome / Chrome Profile / CDP;
+- динамический каталог команд;
 - общие параметры;
-- DPAPI-секреты/API keys;
-- GitHub-модули;
-- обновление модулей;
-- результаты/логи;
+- DPAPI-хранилище секретов/API keys;
+- установка и обновление GitHub-модулей;
+- результаты и журналы;
 - CLI/AI command interface.
 
-## GitHub Repository
-
-Создайте Repository:
-
-`AutomationPlatform`
-
-и загрузите содержимое этой папки `GitHub_Repository_Template` в корень репозитория.
-
-После загрузки Raw URL manifest будет:
-
-`https://raw.githubusercontent.com/OWNER/AutomationPlatform/main/platform_manifest.json`
-
-Этот URL вводится в стартовой панели.
-
-## Что хранится локально и не должно заменяться обновлением
-
-- `browser\Chrome_Profile`
-- `data\shared_values.json`
-- `data\secrets.dpapi.json`
-- `jobs`
-- `logs`
-- пользовательские модули
-
-## Командный интерфейс для AI
+## Команды для AI
 
 ```cmd
 D:\AutomationPlatform\automation.cmd list
@@ -62,29 +53,33 @@ D:\AutomationPlatform\automation.cmd run browser.start
 D:\AutomationPlatform\automation.cmd run example.register --param site_url=https://example.com
 ```
 
-AI может читать только:
+AI может использовать `D:\AutomationPlatform\commands\catalog.json` и командные контракты модулей вместо чтения всего исходного проекта.
 
-`D:\AutomationPlatform\commands\catalog.json`
+## Обновление платформы
 
-и не читать весь исходный код.
+Во время первой установки в локальную платформу записываются актуальные файлы установщика и создаётся:
 
-## module.json
+`D:\AutomationPlatform\UPDATE_PLATFORM.cmd`
 
-Каждый модуль публикует свой командный контракт. Control Center автоматически строит GUI-поля из `parameters`.
+Повторный запуск обновления может доставить/обновить программный слой, не удаляя пользовательские данные.
 
-Для секретов используйте:
+Не заменяются:
 
-`"type": "secret_ref"`
+- `browser\Chrome_Profile`;
+- `data\shared_values.json`;
+- `data\secrets.dpapi.json`;
+- пользовательские `modules`;
+- `jobs`;
+- `logs`.
 
-Тогда в каталог и обычные job-файлы попадает только имя секрета, а не его значение.
+## GitHub package
 
-## Самообновление
+Control Center публикуется как:
 
-Повторный запуск `START_PLATFORM_INSTALLER.ps1` является механизмом обновления платформенного слоя:
+`packages/control_center_v0.4.0.part01.b64` … `part06.b64`
 
-- Python можно проверить/доставить;
-- Chrome обновляется до текущего Stable CfT;
-- Control Center заменяется версией, указанной в `platform_manifest.json`;
-- Chrome Profile и локальные данные не удаляются.
+На GitHub пакет хранится несколькими Base64-текстовыми частями, затем установщик автоматически объединяет их и локально восстанавливает ZIP. SHA-256 исходного ZIP зафиксирован в `platform_manifest.json` и проверяется до распаковки.
 
-Позднее этот же вызов можно сделать одной кнопкой непосредственно из Control Center.
+## Безопасность репозитория
+
+Никогда не коммитьте локальные профили Chrome, API-ключи, токены, `.env`, runtime и пользовательские данные. Для этого используется `.gitignore`.
