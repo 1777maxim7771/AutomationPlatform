@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
   "repository": {
@@ -28,13 +28,30 @@
     "installer_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe",
     "embed_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-embed-amd64.zip",
     "get_pip_url": "https://bootstrap.pypa.io/get-pip.py",
-    "sha256": "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0",
-    "note": "embed_first avoids Windows silent-installer no-op; full MSI used only as secondary attempt"
+    "sha256": "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0"
   },
   "chrome": {
+    "prefer_system_chrome": true,
+    "install_cft_if_missing": true,
     "channel": "Stable",
     "platform": "win64",
-    "cft_json_url": "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+    "cft_json_url": "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json",
+    "debug_port": 9222,
+    "launch_args": [
+      "--remote-debugging-port=9222",
+      "--remote-allow-origins=*",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-popup-blocking"
+    ],
+    "start_urls": [
+      "https://chatgpt.com"
+    ],
+    "system_chrome_paths": [
+      "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe",
+      "%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe",
+      "%LocalAppData%\\Google\\Chrome\\Application\\chrome.exe"
+    ]
   },
   "defaults": {
     "install_root": "D:\\AutomationPlatform",
