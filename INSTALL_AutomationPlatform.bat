@@ -12,6 +12,7 @@ set "REPO_RAW=https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform
 set "MANIFEST_URL=%REPO_RAW%/platform_manifest.json"
 set "TEMP_BOOT=%TEMP%\AutomationPlatform_Bootstrap"
 set "RUNNER=%TEMP_BOOT%\BOOTSTRAP_RUNNER.ps1"
+set "LATEST_LOG=%TARGET_ROOT%\logs\latest_bootstrap.log"
 
 if not exist "%TARGET_ROOT%" mkdir "%TARGET_ROOT%" 2>nul
 if not exist "%TARGET_ROOT%\logs" mkdir "%TARGET_ROOT%\logs" 2>nul
@@ -72,8 +73,17 @@ if not "%RC%"=="0" (
     echo ============================================================
     echo [ERROR] AutomationPlatform operation failed. Exit code %RC%
     echo [LOGS ] %TARGET_ROOT%\logs
-    echo [LATEST] %TARGET_ROOT%\logs\latest_bootstrap.log
+    echo [LATEST] %LATEST_LOG%
     echo ============================================================
+    echo.
+    if exist "%LATEST_LOG%" (
+        echo ---------------- LATEST DIAGNOSTICS ----------------
+        powershell.exe -NoProfile -Command "Get-Content -Path '%LATEST_LOG%' -Tail 70 -ErrorAction SilentlyContinue"
+        echo ----------------------------------------------------
+    ) else (
+        echo [WARN] latest_bootstrap.log was not created.
+    )
+    echo.
     pause
     exit /b %RC%
 )
