@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
   "repository": {
@@ -13,6 +13,7 @@
     "bootstrap_bat": "INSTALL_AutomationPlatform.bat",
     "bootstrap_runner": "BOOTSTRAP_RUNNER.ps1",
     "core": "INSTALLER_CORE.ps1",
+    "python_runtime_manager": "PYTHON_RUNTIME_MANAGER.ps1",
     "advanced_gui": "START_PLATFORM_INSTALLER.ps1",
     "mode": "install_update_repair",
     "always_refresh_bootstrap_logic": true,
@@ -31,11 +32,15 @@
   },
   "python": {
     "version": "3.13.14",
-    "method": "full_only_when_tkinter_required",
+    "method": "official_pythoncore_runtime_zip",
+    "application_local": true,
     "require_tkinter": true,
-    "allow_embedded_fallback": false,
-    "installer_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe",
-    "sha256": "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0"
+    "require_pip": true,
+    "runtime_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.zip",
+    "runtime_sha256": "f73b6535281b58eee6bcfb3403af2bcfac711ea1463d8340c47c3047248eddf7",
+    "release_manifest_url": "https://www.python.org/ftp/python/3.13.14/windows-3.13.14.json",
+    "legacy_installer_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe",
+    "legacy_installer_sha256": "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0"
   },
   "chrome": {
     "required": true,
