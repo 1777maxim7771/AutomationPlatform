@@ -6,72 +6,41 @@ param(
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-function Write-Step([string]$Text) {
-    Write-Host "[AutomationPlatform][PYTHON-REPAIR] $Text" -ForegroundColor Cyan
-}
-
-$Root = $Root.Trim().Trim([char]0x22, [char]0x27).TrimEnd('\','/').Trim()
+$Root = $Root.Trim().Trim([char]0x22,[char]0x27).TrimEnd('\','/').Trim()
 if (-not $Root) { throw "Root path is empty." }
 
-$pythonExe = Join-Path $Root "runtime\python\python.exe"
 $installerDir = Join-Path $Root "installer"
 $tempDir = Join-Path $env:TEMP "AutomationPlatformPythonRepair"
-$corePath = Join-Path $tempDir "INSTALLER_CORE.ps1"
+$managerPath = Join-Path $tempDir "PYTHON_RUNTIME_MANAGER.ps1"
+$localManager = Join-Path $installerDir "PYTHON_RUNTIME_MANAGER.ps1"
+$base = "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main"
 
-New-Item -ItemType Directory -Force -Path $installerDir | Out-Null
-New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+New-Item -ItemType Directory -Force -Path $installerDir,$tempDir | Out-Null
 
-function Test-Tkinter {
-    if (-not (Test-Path $pythonExe)) { return $false }
-    & $pythonExe -c "import tkinter; print(tkinter.TkVersion)" *> $null
-    return ($LASTEXITCODE -eq 0)
-}
+Write-Host "[AutomationPlatform][PYTHON-REPAIR] Downloading latest portable Python Runtime Manager..." -ForegroundColor Cyan
+$u = "$base/PYTHON_RUNTIME_MANAGER.ps1?nocache=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $managerPath
+if (-not (Test-Path $managerPath)) { throw "PYTHON_RUNTIME_MANAGER.ps1 was not downloaded." }
+Copy-Item -Force $managerPath $localManager
 
-if (Test-Tkinter) {
-    Write-Step "tkinter is already available. No repair is required."
-    exit 0
-}
-
-Write-Step "tkinter is missing from the project-local Python runtime."
-Write-Step "Downloading the latest installer core from GitHub..."
-
-$base = "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/"
-$stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-$coreUrl = $base + "INSTALLER_CORE.ps1?nocache=" + $stamp
-Invoke-WebRequest -UseBasicParsing -Uri $coreUrl -OutFile $corePath
-
-if (-not (Test-Path $corePath)) {
-    throw "INSTALLER_CORE.ps1 was not downloaded: $corePath"
-}
-
-Copy-Item -Force $corePath (Join-Path $installerDir "INSTALLER_CORE.ps1")
-Write-Step "Installer Core: $corePath"
-Write-Step "Reinstalling the local Python runtime as full CPython with Tcl/Tk..."
-
-# Use direct invocation instead of Start-Process -ArgumentList so every argument
-# remains a distinct PowerShell argument even when a future install path has spaces.
+Write-Host "[AutomationPlatform][PYTHON-REPAIR] Checking / installing / updating / repairing application-local Python..." -ForegroundColor Cyan
 & powershell.exe `
     -NoProfile `
     -ExecutionPolicy Bypass `
-    -File $corePath `
+    -File $managerPath `
     -Root $Root `
-    -ManifestUrl $ManifestUrl `
-    -InstallPython `
-    -CreateChromeProfile
+    -ManifestUrl $ManifestUrl
 
-$coreExit = $LASTEXITCODE
-if ($coreExit -ne 0) {
-    throw "Installer Core failed while repairing Python. Exit code: $coreExit"
+$rc = $LASTEXITCODE
+if ($rc -ne 0) {
+    throw "Python Runtime Manager failed with exit code $rc. See $Root\logs\latest_python_runtime.log"
 }
 
-if (-not (Test-Path $pythonExe)) {
-    throw "Python repair finished but python.exe was not found: $pythonExe"
-}
+$pythonExe = Join-Path $Root "runtime\python\python.exe"
+if (-not (Test-Path $pythonExe)) { throw "python.exe is missing after runtime repair: $pythonExe" }
 
-if (-not (Test-Tkinter)) {
-    throw "Python was repaired, but tkinter is still unavailable. See $Root\logs for the latest install log."
-}
+& $pythonExe -c "import sys, tkinter; print('Python', sys.version.split()[0], '| Tk', tkinter.TkVersion)"
+if ($LASTEXITCODE -ne 0) { throw "Final Python/tkinter check failed after runtime repair." }
 
-Write-Step "Repair completed successfully. tkinter is available."
-& $pythonExe -c "import tkinter; print('Python tkinter OK; Tk version:', tkinter.TkVersion)"
+Write-Host "[AutomationPlatform][PYTHON-REPAIR] Repair completed successfully." -ForegroundColor Green
 exit 0
