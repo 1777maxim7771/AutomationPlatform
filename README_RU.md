@@ -1,50 +1,86 @@
-# AutomationPlatform Full Starter v0.4.0
+# AutomationPlatform Full Starter v0.5.0
 
 Центральный репозиторий для развёртывания и обновления локальной платформы в:
 
 `D:\AutomationPlatform`
 
-## Быстрый старт — один файл
+## Быстрый старт
 
-Для первоначальной установки достаточно скачать:
+В PowerShell:
 
-`START_PLATFORM_INSTALLER.ps1`
+```powershell
+irm https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/INSTALL_AutomationPlatform.ps1 | iex
+```
 
-Он уже знает основной GitHub Manifest:
+Или скачайте и запустите `INSTALL_AutomationPlatform.bat`.
+
+Манифест:
 
 `https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/platform_manifest.json`
 
-При запуске стартовая панель сама скачивает актуальный `INSTALLER_CORE.ps1` с этого репозитория и затем разворачивает выбранные компоненты.
-
 ## Что устанавливается
 
-- отдельный локальный Python в `D:\AutomationPlatform\runtime\python`;
-- Chrome for Testing в `D:\AutomationPlatform\runtime\chrome`;
-- постоянный Debug-профиль в `D:\AutomationPlatform\browser\Chrome_Profile`;
-- AutomationPlatform Control Center;
-- командный интерфейс `automation.cmd` для GUI, CLI, AI-агентов и будущих workflow.
+| Компонент | Путь | Обязателен |
+|-----------|------|------------|
+| Локальный Python (embed) | `runtime\python\python.exe` | рекомендуется |
+| **Официальный Google Chrome** | системный `chrome.exe` | **да** |
+| Debug-профиль | `browser\Chrome_Profile` | да |
+| Control Center | `control_center\`, `core\`, `commands\` | да |
+| CLI | `automation.cmd` | да |
 
-## Chrome Profile
+**Chrome for Testing не используется** (плашка «только для тестирования» недопустима).
+Если Google Chrome отсутствует, установщик предлагает поставить официальный Chrome.
+Отказ от установки Chrome **прерывает** развёртывание платформы.
 
-`browser\Chrome_Profile` создаётся только локально. Он не скачивается из GitHub и не заменяется обновлением платформы. В нём сохраняются локальные браузерные сессии и авторизации.
+## Chrome Debug
+
+```cmd
+D:\AutomationPlatform\START_CHROME_DEBUG.cmd
+```
+
+Запускает **официальный** Google Chrome с:
+
+- `--remote-debugging-port=9222`
+- `--user-data-dir=D:\AutomationPlatform\browser\Chrome_Profile`
+
+Один раз войдите в ChatGPT в этом окне — сессия сохранится в профиле платформы.
 
 ## Control Center
 
-После установки запускается:
+```cmd
+D:\AutomationPlatform\START_CONTROL_CENTER.cmd
+```
 
-`D:\AutomationPlatform\START_CONTROL_CENTER.cmd`
+Лаунчер **проверяет зависимости** перед стартом:
 
-В Control Center предусмотрены:
+1. Python (`config\platform.json` → `runtime\python\python.exe`)
+2. Официальный Google Chrome
+3. Папка `control_center\` и entry-скрипт (`main.py` / `app.py` / …)
 
-- состояние Python / Chrome / Chrome Profile / CDP;
-- динамический каталог команд;
-- общие параметры;
-- DPAPI-хранилище секретов/API keys;
-- установка и обновление GitHub-модулей;
-- результаты и журналы;
-- CLI/AI command interface.
+Если чего-то нет — окно **не закрывается сразу**, показывает текст ошибки и `pause`.
 
-## Команды для AI
+### Почему Control Center мог «не запускаться»
+
+| Причина | Решение |
+|---------|---------|
+| Нет `runtime\python\python.exe` | `UPDATE_PLATFORM.cmd`, включить Local Python |
+| В `platform.json` битый путь к Python/Chrome | перезапустить UPDATE |
+| Пустой/битый `control_center\` | UPDATE с галкой Control Center |
+| Двойной клик закрывает окно до чтения ошибки | запускать из `cmd` |
+
+Диагностика:
+
+```cmd
+cd /d D:\AutomationPlatform
+START_CONTROL_CENTER.cmd
+type config\platform.json
+dir runtime\python\python.exe
+dir control_center
+```
+
+## Только команды (без GUI)
+
+Платформа рассчитана и на CLI-only режим:
 
 ```cmd
 D:\AutomationPlatform\automation.cmd list
@@ -53,33 +89,40 @@ D:\AutomationPlatform\automation.cmd run browser.start
 D:\AutomationPlatform\automation.cmd run example.register --param site_url=https://example.com
 ```
 
-AI может использовать `D:\AutomationPlatform\commands\catalog.json` и командные контракты модулей вместо чтения всего исходного проекта.
+Каталог: `commands\catalog.json`.
 
-## Обновление платформы
+## Обновление / ремонт
 
-Во время первой установки в локальную платформу записываются актуальные файлы установщика и создаётся:
+```cmd
+D:\AutomationPlatform\UPDATE_PLATFORM.cmd
+```
 
-`D:\AutomationPlatform\UPDATE_PLATFORM.cmd`
+Повторный запуск **самовосстанавливающий**:
 
-Повторный запуск обновления может доставить/обновить программный слой, не удаляя пользовательские данные.
+- доставляет отсутствующий Python (embed_first);
+- требует/ставит Google Chrome;
+- обновляет Control Center и лаунчеры;
+- **не трогает** `browser\Chrome_Profile`, secrets, пользовательские modules/jobs/logs.
 
-Не заменяются:
+## Структура после установки
 
-- `browser\Chrome_Profile`;
-- `data\shared_values.json`;
-- `data\secrets.dpapi.json`;
-- пользовательские `modules`;
-- `jobs`;
-- `logs`.
+```text
+D:\AutomationPlatform\
+  START_CONTROL_CENTER.cmd
+  START_CHROME_DEBUG.cmd
+  UPDATE_PLATFORM.cmd
+  automation.cmd
+  config\platform.json
+  browser\Chrome_Profile\
+  runtime\python\
+  control_center\
+  core\
+  commands\
+  modules\
+  logs\
+  installer\
+```
 
-## GitHub package
+## Безопасность
 
-Control Center хранится одним готовым ZIP-пакетом:
-
-`packages/AutomationPlatform_ControlCenter_v0.4.0.zip`
-
-Его SHA-256 записан в `platform_manifest.json` и проверяется установщиком до распаковки. Это позволяет обнаружить повреждённую или неожиданно изменённую загрузку.
-
-## Безопасность репозитория
-
-Никогда не коммитьте локальные профили Chrome, API-ключи, токены, `.env`, runtime и пользовательские данные. Для этого используется `.gitignore`.
+Не коммитьте профили Chrome, API-ключи, токены, `.env`, runtime и пользовательские данные (см. `.gitignore`).
