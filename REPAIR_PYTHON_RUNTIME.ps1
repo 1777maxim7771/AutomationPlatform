@@ -39,22 +39,29 @@ $base = "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main
 $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $coreUrl = $base + "INSTALLER_CORE.ps1?nocache=" + $stamp
 Invoke-WebRequest -UseBasicParsing -Uri $coreUrl -OutFile $corePath
+
+if (-not (Test-Path $corePath)) {
+    throw "INSTALLER_CORE.ps1 was not downloaded: $corePath"
+}
+
 Copy-Item -Force $corePath (Join-Path $installerDir "INSTALLER_CORE.ps1")
+Write-Step "Installer Core: $corePath"
+Write-Step "Reinstalling the local Python runtime as full CPython with Tcl/Tk..."
 
-Write-Step "Reinstalling the local Python runtime as the full CPython distribution with Tcl/Tk..."
-$args = @(
-    "-NoProfile",
-    "-ExecutionPolicy", "Bypass",
-    "-File", $corePath,
-    "-Root", $Root,
-    "-ManifestUrl", $ManifestUrl,
-    "-InstallPython",
-    "-CreateChromeProfile"
-)
+# Use direct invocation instead of Start-Process -ArgumentList so every argument
+# remains a distinct PowerShell argument even when a future install path has spaces.
+& powershell.exe `
+    -NoProfile `
+    -ExecutionPolicy Bypass `
+    -File $corePath `
+    -Root $Root `
+    -ManifestUrl $ManifestUrl `
+    -InstallPython `
+    -CreateChromeProfile
 
-$p = Start-Process -FilePath "powershell.exe" -ArgumentList $args -Wait -PassThru
-if ($p.ExitCode -ne 0) {
-    throw "Installer Core failed while repairing Python. Exit code: $($p.ExitCode)"
+$coreExit = $LASTEXITCODE
+if ($coreExit -ne 0) {
+    throw "Installer Core failed while repairing Python. Exit code: $coreExit"
 }
 
 if (-not (Test-Path $pythonExe)) {
@@ -62,7 +69,7 @@ if (-not (Test-Path $pythonExe)) {
 }
 
 if (-not (Test-Tkinter)) {
-    throw "Python was repaired, but tkinter is still unavailable. See D:\AutomationPlatform\logs for the latest install log."
+    throw "Python was repaired, but tkinter is still unavailable. See $Root\logs for the latest install log."
 }
 
 Write-Step "Repair completed successfully. tkinter is available."
