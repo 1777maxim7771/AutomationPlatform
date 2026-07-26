@@ -1,5 +1,5 @@
 {
-  "schema_version": 10,
+  "schema_version": 11,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
   "repository": {
@@ -27,7 +27,7 @@
     "live_log": "logs\\latest_bootstrap.log"
   },
   "control_center": {
-    "version": "0.5.0",
+    "version": "0.5.1",
     "encoding": "base64-parts",
     "package_path": "packages/control_center_v0.5.0.part01.b64",
     "package_parts": [
@@ -37,6 +37,7 @@
       "packages/control_center_v0.5.0.part04.b64"
     ],
     "sha256": "347948bc0d5d8779e12f8cf8add30210c5acfa15dda2a8c936033e3e246a449e",
+    "post_extract_compatibility_patch": "fxbutton_tkinter_reserved_widget_path_v1",
     "required_files": [
       "control_center\\gui.py",
       "core\\router.py"
