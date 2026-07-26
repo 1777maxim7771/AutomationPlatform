@@ -1,16 +1,33 @@
 param(
     [string]$DefaultRoot = "D:\AutomationPlatform",
-    [string]$ManifestUrl = ""
+    [string]$ManifestUrl = "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/platform_manifest.json"
 )
+
+$ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-
 [System.Windows.Forms.Application]::EnableVisualStyles()
+
+$RepoRawBase = "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main"
+$InstallerCoreUrl = "$RepoRawBase/INSTALLER_CORE.ps1"
+
+function Get-LatestInstallerCore {
+    param([string]$Destination)
+
+    $dir = Split-Path -Parent $Destination
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    Invoke-WebRequest -UseBasicParsing -Uri $InstallerCoreUrl -OutFile $Destination
+
+    if (-not (Test-Path $Destination)) {
+        throw "Не удалось скачать INSTALLER_CORE.ps1 с GitHub."
+    }
+}
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "AutomationPlatform — Initial Setup / Update"
-$form.Size = New-Object System.Drawing.Size(780, 610)
+$form.Size = New-Object System.Drawing.Size(800, 625)
 $form.StartPosition = "CenterScreen"
 $form.BackColor = [System.Drawing.Color]::FromArgb(18,24,32)
 $form.ForeColor = [System.Drawing.Color]::White
@@ -39,11 +56,11 @@ $form.Controls.Add($labRoot)
 $txtRoot = New-Object System.Windows.Forms.TextBox
 $txtRoot.Text = $DefaultRoot
 $txtRoot.Location = New-Object System.Drawing.Point(28, 126)
-$txtRoot.Size = New-Object System.Drawing.Size(700, 28)
+$txtRoot.Size = New-Object System.Drawing.Size(720, 28)
 $form.Controls.Add($txtRoot)
 
 $labManifest = New-Object System.Windows.Forms.Label
-$labManifest.Text = "Raw URL platform_manifest.json"
+$labManifest.Text = "GitHub Manifest"
 $labManifest.AutoSize = $true
 $labManifest.Location = New-Object System.Drawing.Point(28, 170)
 $form.Controls.Add($labManifest)
@@ -51,11 +68,11 @@ $form.Controls.Add($labManifest)
 $txtManifest = New-Object System.Windows.Forms.TextBox
 $txtManifest.Text = $ManifestUrl
 $txtManifest.Location = New-Object System.Drawing.Point(28, 196)
-$txtManifest.Size = New-Object System.Drawing.Size(700, 28)
+$txtManifest.Size = New-Object System.Drawing.Size(720, 28)
 $form.Controls.Add($txtManifest)
 
 $hint = New-Object System.Windows.Forms.Label
-$hint.Text = "Пример: https://raw.githubusercontent.com/OWNER/AutomationPlatform/main/platform_manifest.json"
+$hint.Text = "Репозиторий: github.com/1777maxim7771/AutomationPlatform"
 $hint.ForeColor = [System.Drawing.Color]::Gray
 $hint.AutoSize = $true
 $hint.Location = New-Object System.Drawing.Point(28, 228)
@@ -97,7 +114,7 @@ $cbLaunch.Location = New-Object System.Drawing.Point(32, 406)
 $form.Controls.Add($cbLaunch)
 
 $status = New-Object System.Windows.Forms.Label
-$status.Text = "Готово к установке."
+$status.Text = "Готово к установке. Installer Core будет автоматически получен с GitHub."
 $status.ForeColor = [System.Drawing.Color]::LightGray
 $status.AutoSize = $true
 $status.Location = New-Object System.Drawing.Point(32, 458)
@@ -105,9 +122,9 @@ $form.Controls.Add($status)
 
 $btn = New-Object System.Windows.Forms.Button
 $btn.Text = "УСТАНОВИТЬ / ОБНОВИТЬ"
-$btn.Size = New-Object System.Drawing.Size(260, 46)
-$btn.Location = New-Object System.Drawing.Point(468, 486)
-$btn.BackColor = [System.Drawing.Color]::FromArgb(82, 207, 164)
+$btn.Size = New-Object System.Drawing.Size(280, 46)
+$btn.Location = New-Object System.Drawing.Point(468, 500)
+$btn.BackColor = [System.Drawing.Color]::FromArgb(82,207,164)
 $btn.ForeColor = [System.Drawing.Color]::Black
 $btn.FlatStyle = "Flat"
 $form.Controls.Add($btn)
@@ -122,19 +139,19 @@ $btn.Add_Click({
             return
         }
         if (-not $manifest) {
-            [System.Windows.Forms.MessageBox]::Show("Укажите Raw URL platform_manifest.json на GitHub.") | Out-Null
+            [System.Windows.Forms.MessageBox]::Show("Укажите URL platform_manifest.json.") | Out-Null
             return
         }
 
-        $core = Join-Path $PSScriptRoot "INSTALLER_CORE.ps1"
-        if (-not (Test-Path $core)) {
-            throw "INSTALLER_CORE.ps1 не найден рядом со стартовой панелью."
-        }
+        $tempCore = Join-Path $env:TEMP "AutomationPlatformBootstrap\INSTALLER_CORE.ps1"
+        $status.Text = "Получаю актуальный Installer Core с GitHub…"
+        $form.Refresh()
+        Get-LatestInstallerCore -Destination $tempCore
 
         $args = @(
             "-NoProfile",
             "-ExecutionPolicy", "Bypass",
-            "-File", "`"$core`"",
+            "-File", "`"$tempCore`"",
             "-Root", "`"$root`"",
             "-ManifestUrl", "`"$manifest`""
         )
@@ -143,7 +160,7 @@ $btn.Add_Click({
         if ($cbControl.Checked) { $args += "-InstallControlCenter" }
         if ($cbProfile.Checked) { $args += "-CreateChromeProfile" }
 
-        $status.Text = "Выполняется установка. Откроется консоль с подробным процессом…"
+        $status.Text = "Выполняется установка. Открыта консоль с подробным процессом…"
         $form.Refresh()
 
         $p = Start-Process powershell.exe -ArgumentList $args -Wait -PassThru
@@ -152,6 +169,7 @@ $btn.Add_Click({
         }
 
         $status.Text = "Установка завершена."
+
         if ($cbLaunch.Checked) {
             $launcher = Join-Path $root "START_CONTROL_CENTER.cmd"
             if (Test-Path $launcher) {
