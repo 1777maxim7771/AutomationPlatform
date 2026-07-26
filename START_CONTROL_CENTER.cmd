@@ -90,28 +90,30 @@ if not exist "%CC_DIR%" (
   exit /b 1
 )
 
-REM ---- Find entry script ----
+REM ---- Find entry script (v0.4.0 package uses gui.py + automation_cli.py) ----
 set "ENTRY="
 for %%F in (
+  "%CC_DIR%\gui.py"
   "%CC_DIR%\main.py"
   "%CC_DIR%\app.py"
   "%CC_DIR%\control_center.py"
   "%CC_DIR%\__main__.py"
+  "%CC_DIR%\automation_cli.py"
   "%ROOT%\core\main.py"
   "%ROOT%\core\app.py"
+  "%ROOT%\core\gui.py"
 ) do (
   if exist %%~F if not defined ENTRY set "ENTRY=%%~F"
 )
 
 if not defined ENTRY (
   echo [ERROR] No Control Center entry script found.
-  echo Expected one of: control_center\main.py / app.py / control_center.py
+  echo Expected: control_center\gui.py  (or main.py / app.py / automation_cli.py)
   echo.
   echo Contents of control_center:
   dir /b "%CC_DIR%" 2>nul
   echo.
-  echo The Control Center package may be incomplete.
-  echo Re-run UPDATE_PLATFORM.cmd or reinstall Control Center package.
+  echo Re-run UPDATE_PLATFORM.cmd with Control Center enabled.
   pause
   exit /b 1
 )
@@ -123,6 +125,8 @@ echo.
 set "PYTHONPATH=%ROOT%;%CC_DIR%;%ROOT%\core;%PYTHONPATH%"
 set "AUTOMATION_PLATFORM_ROOT=%ROOT%"
 set "AUTOMATION_PLATFORM_CONFIG=%CONFIG%"
+set "AUTOMATION_PLATFORM_CHROME=%CHROME%"
+set "AUTOMATION_PLATFORM_PROFILE=%PROFILE%"
 
 "%PYTHON%" "%ENTRY%"
 set "RC=%ERRORLEVEL%"
