@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$FinalizerVersion = "2026.07.27.2"
+$FinalizerVersion = "2026.07.27.3"
 
 $Root = $Root.Trim().Trim([char]0x22,[char]0x27).TrimEnd('\','/').Trim()
 if (-not $Root) { throw "Root path is empty." }
@@ -55,6 +55,50 @@ function Version-Of([string]$Path){if($Path -and (Test-Path $Path)){try{return (
 function Py-Version([string]$Exe){if(-not(Test-Path $Exe)){return $null};try{$v=& $Exe -c "import sys;print('.'.join(map(str,sys.version_info[:3])))" 2>$null;if($LASTEXITCODE -eq 0){return([string]$v).Trim()}}catch{};return $null}
 function Test-Tk([string]$Exe){if(-not(Test-Path $Exe)){return $false};try{& $Exe -c "import tkinter" 2>$null;return($LASTEXITCODE -eq 0)}catch{return $false}}
 function Test-Pip([string]$Exe){if(-not(Test-Path $Exe)){return $false};try{& $Exe -m pip --version 2>$null;return($LASTEXITCODE -eq 0)}catch{return $false}}
+
+function Repair-ControlCenterGui([string]$GuiPath,[string]$PythonExe,[string]$ExpectedVersion) {
+    if(-not(Test-Path $GuiPath)){throw "Control Center GUI is missing: $GuiPath"}
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $text = [IO.File]::ReadAllText($GuiPath,$utf8)
+    $rx = [regex]::new('(?ms)^class\s+FXButton\b.*?(?=^class\s+|\z)')
+    $m = $rx.Match($text)
+    if(-not $m.Success){throw "FXButton class was not found in Control Center GUI."}
+
+    $block = $m.Value
+    $changed = $false
+    # Tkinter itself owns widget._w (Tcl command path). The old visual button
+    # accidentally reused _w for pixel width, turning commands into names such
+    # as '195'. Only patch the FXButton block when that bad assignment exists.
+    if($block -match 'self\._w\s*=\s*width') {
+        $block = [regex]::Replace($block,'self\._w\b','self._fx_w')
+        $changed = $true
+        Action "CONTROL_CENTER" "PATCH" "FXButton width field self._w -> self._fx_w (protect Tkinter Tcl widget path)"
+    }
+    if($block -match 'self\._h\s*=\s*height') {
+        $block = [regex]::Replace($block,'self\._h\b','self._fx_h')
+        $changed = $true
+        Action "CONTROL_CENTER" "PATCH" "FXButton height field self._h -> self._fx_h"
+    }
+    if($changed) {
+        $text = $text.Substring(0,$m.Index) + $block + $text.Substring($m.Index+$m.Length)
+    }
+    # Keep the visible title/version aligned with the manifest build.
+    if($ExpectedVersion) {
+        $text = $text.Replace('v0.5.0',('v'+$ExpectedVersion))
+        $text = $text.Replace('"0.5.0"',('"'+$ExpectedVersion+'"'))
+        $text = $text.Replace("'0.5.0'",("'"+$ExpectedVersion+"'"))
+    }
+    [IO.File]::WriteAllText($GuiPath,$text,$utf8)
+
+    $verify=[IO.File]::ReadAllText($GuiPath,$utf8)
+    $vm=$rx.Match($verify)
+    if(-not $vm.Success){throw "FXButton disappeared after GUI repair."}
+    if($vm.Value -match 'self\._w\s*=\s*width'){throw "FXButton repair failed: Tkinter reserved self._w is still overwritten."}
+
+    & $PythonExe -m py_compile $GuiPath 2>&1 | ForEach-Object { Log ("[py_compile] "+[string]$_) }
+    if($LASTEXITCODE -ne 0){throw "Control Center gui.py failed Python syntax validation after repair."}
+    Action "CONTROL_CENTER" "VALIDATE" "gui.py compiled successfully; FXButton Tkinter collision absent"
+}
 
 try {
     Log "Root=$Root"
@@ -116,7 +160,11 @@ try {
         if(-not((Test-Path $ccGui) -and (Test-Path $ccRouter))){throw "Control Center files are incomplete after extraction."}
         $installedCc=$expectedCc
         Action "CONTROL_CENTER" "OK" "Version=$installedCc"
-    } else { Action "CONTROL_CENTER" "SKIP" "Already current and healthy. Version=$installedCc" }
+    } else { Action "CONTROL_CENTER" "SKIP" "Program files already present. Version=$installedCc" }
+
+    # Always run compatibility repair, even after SKIP, so an already-installed
+    # broken GUI from an earlier package is repaired on the next self-update.
+    Repair-ControlCenterGui -GuiPath $ccGui -PythonExe $pythonExe -ExpectedVersion $expectedCc
 
     Action "LAUNCHERS" "REFRESH" "Refreshing dynamic launchers and installer helpers from GitHub"
     $rootScripts=@('START_CHROME_DEBUG.cmd','START_CONTROL_CENTER.cmd','UPDATE_PLATFORM.cmd')
@@ -140,7 +188,7 @@ try {
         schema_version=2;generated_at=(Get-Date).ToString('o');overall_status='ok';root=$Root;components=[ordered]@{
             python=[ordered]@{status='ok';action='PREVERIFIED';installed_version=$pythonVersion;tkinter=$tk;pip=$pip;path=$pythonExe};
             chrome=[ordered]@{status='ok';action='PREVERIFIED';installed_version=$chromeVersion;path=$chromeExe};
-            control_center=[ordered]@{status='ok';action=$ccAction;installed_version=$installedCc;expected_version=$expectedCc;healthy=$true};
+            control_center=[ordered]@{status='ok';action=$ccAction;installed_version=$installedCc;expected_version=$expectedCc;healthy=$true;fxbutton_patch='ok'};
             chrome_profile=[ordered]@{status='ok';exists=(Test-Path $profile);path=$profile};
             launchers=[ordered]@{status='ok';action='REFRESH'}
         }
@@ -148,7 +196,7 @@ try {
     $statusPath=Join-Path $dataDir 'platform_status.json';$status|ConvertTo-Json -Depth 10|Set-Content -Encoding UTF8 $statusPath
     Log "Status file: $statusPath"
 
-    Action "HEALTH" "OK" "Python=$pythonVersion Chrome=$chromeVersion ControlCenter=$installedCc Profile=True"
+    Action "HEALTH" "OK" "Python=$pythonVersion Chrome=$chromeVersion ControlCenter=$installedCc FXButtonPatch=OK Profile=True"
     Copy-Item -Force $logFile $latestLog
     exit 0
 }
