@@ -1,5 +1,5 @@
 {
-  "schema_version": 8,
+  "schema_version": 9,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
   "repository": {
@@ -14,6 +14,7 @@
     "bootstrap_runner": "BOOTSTRAP_RUNNER.ps1",
     "core": "INSTALLER_CORE.ps1",
     "python_runtime_manager": "PYTHON_RUNTIME_MANAGER.ps1",
+    "chrome_runtime_manager": "CHROME_RUNTIME_MANAGER.ps1",
     "advanced_gui": "START_PLATFORM_INSTALLER.ps1",
     "mode": "install_update_repair",
     "always_refresh_bootstrap_logic": true,
@@ -22,9 +23,16 @@
     "write_status_json": true
   },
   "control_center": {
-    "version": "0.4.0",
-    "package_path": "packages/AutomationPlatform_ControlCenter_v0.4.0.zip",
-    "sha256": "99baaeb7246ff72689e2033fe9ce6eb4044981e1327ae1f6b17b0fe705512191",
+    "version": "0.5.0",
+    "encoding": "base64-parts",
+    "package_path": "packages/control_center_v0.5.0.part01.b64",
+    "package_parts": [
+      "packages/control_center_v0.5.0.part01.b64",
+      "packages/control_center_v0.5.0.part02.b64",
+      "packages/control_center_v0.5.0.part03.b64",
+      "packages/control_center_v0.5.0.part04.b64"
+    ],
+    "sha256": "347948bc0d5d8779e12f8cf8add30210c5acfa15dda2a8c936033e3e246a449e",
     "required_files": [
       "control_center\\gui.py",
       "core\\router.py"
@@ -46,20 +54,26 @@
     "required": true,
     "prefer_system_chrome": true,
     "install_google_chrome_if_missing": true,
-    "update_if_older_than_stable": true,
+    "managed_update": true,
+    "update_if_older_than_stable": false,
+    "update_manager": "CHROME_RUNTIME_MANAGER.ps1",
     "use_chrome_for_testing": false,
     "stable_version_url": "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json",
     "google_chrome_installer_url": "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi",
     "google_chrome_installer_kind": "msi",
     "debug_port": 9222,
+    "prompt_for_start_url_when_missing": true,
+    "start_url_value_key": "browser.start_url",
     "launch_args": [
       "--remote-debugging-port=9222",
       "--remote-allow-origins=*",
       "--no-first-run",
       "--no-default-browser-check",
-      "--disable-popup-blocking"
+      "--disable-popup-blocking",
+      "--disable-session-crashed-bubble",
+      "--hide-crash-restore-bubble"
     ],
-    "start_urls": ["https://chatgpt.com"],
+    "start_urls": [],
     "system_chrome_paths": [
       "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe",
       "%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe",
