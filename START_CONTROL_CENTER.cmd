@@ -1,5 +1,5 @@
 @echo off
-REM AutomationPlatform START_CONTROL_CENTER.cmd v20260726e
+REM AutomationPlatform START_CONTROL_CENTER.cmd v20260726f
 setlocal EnableExtensions
 cd /d "%~dp0"
 
@@ -11,11 +11,13 @@ set "CONFIG=%ROOT%\config\platform.json"
 set "CC_DIR=%ROOT%\control_center"
 set "LOGDIR=%ROOT%\logs"
 set "INSTALLERDIR=%ROOT%\installer"
+set "REPAIR=%INSTALLERDIR%\REPAIR_PYTHON_RUNTIME.ps1"
+set "PYTHON_RUNTIME=%ROOT%\runtime\python\python.exe"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 if not exist "%INSTALLERDIR%" mkdir "%INSTALLERDIR%"
 
 echo ============================================================
-echo  AutomationPlatform - Control Center  [v20260726e]
+echo  AutomationPlatform - Control Center  [v20260726f]
 echo ============================================================
 echo  Root: %ROOT%
 echo.
@@ -24,7 +26,7 @@ set "PYTHON="
 if exist "%CONFIG%" (
   for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "try { (Get-Content -Raw '%CONFIG%' | ConvertFrom-Json).python_exe } catch {''}"`) do set "PYTHON=%%A"
 )
-if not defined PYTHON if exist "%ROOT%\runtime\python\python.exe" set "PYTHON=%ROOT%\runtime\python\python.exe"
+if not defined PYTHON if exist "%PYTHON_RUNTIME%" set "PYTHON=%PYTHON_RUNTIME%"
 
 if not defined PYTHON (
   echo [ERROR] Python not found. Run UPDATE_PLATFORM.cmd
@@ -41,16 +43,15 @@ echo  Python : %PYTHON%
 "%PYTHON%" --version 2>nul
 
 REM -----------------------------------------------------------------
-REM Control Center GUI requires tkinter. Old/embed Python builds may
-REM contain python.exe but not Tcl/Tk. Repair the project-local runtime
-REM automatically before gui.py is started.
+REM Control Center GUI requires tkinter. REPAIR and PYTHON_RUNTIME are
+REM defined BEFORE this IF block so classic CMD percent expansion cannot
+REM turn the PowerShell -File parameter into an empty string.
 REM -----------------------------------------------------------------
 "%PYTHON%" -c "import tkinter" >nul 2>&1
 if errorlevel 1 (
   echo.
   echo [REPAIR] tkinter is missing from the local Python runtime.
 
-  set "REPAIR=%INSTALLERDIR%\REPAIR_PYTHON_RUNTIME.ps1"
   if not exist "%REPAIR%" (
     echo [REPAIR] Local repair helper not found. Downloading it from GitHub...
     powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -69,6 +70,7 @@ if errorlevel 1 (
     echo [REPAIR] Using cached helper: %REPAIR%
   )
 
+  echo [REPAIR] Repair script: %REPAIR%
   echo [REPAIR] Reinstalling project-local Python with Tcl/Tk...
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPAIR%" -Root "%ROOT%"
   if errorlevel 1 (
@@ -78,8 +80,13 @@ if errorlevel 1 (
     exit /b 1
   )
 
-  set "PYTHON=%ROOT%\runtime\python\python.exe"
-  "%PYTHON%" -c "import tkinter" >nul 2>&1
+  if not exist "%PYTHON_RUNTIME%" (
+    echo [ERROR] Python runtime is missing after repair: %PYTHON_RUNTIME%
+    pause
+    exit /b 1
+  )
+
+  "%PYTHON_RUNTIME%" -c "import tkinter" >nul 2>&1
   if errorlevel 1 (
     echo [ERROR] tkinter is still unavailable after repair.
     echo         See: %LOGDIR%
@@ -90,6 +97,9 @@ if errorlevel 1 (
   echo [OK] tkinter repaired successfully.
   echo.
 )
+
+REM Prefer the repaired project-local runtime when it exists.
+if exist "%PYTHON_RUNTIME%" set "PYTHON=%PYTHON_RUNTIME%"
 
 set "CHROME="
 if exist "%CONFIG%" (
