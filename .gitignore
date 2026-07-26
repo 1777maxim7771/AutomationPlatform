@@ -1,0 +1,11 @@
+# Never commit local runtime/user data
+runtime/
+browser/
+data/
+jobs/
+logs/
+_update/
+_bootstrap/
+*.log
+.env
+*.key
