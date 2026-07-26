@@ -10,6 +10,10 @@ param(
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# Strip quotes / trailing separators from -Root (avoids "path contains invalid characters")
+$Root = $Root.Trim().Trim([char]0x22, [char]0x27).TrimEnd('\', '/').Trim()
+if (-not $Root) { throw "-Root is empty after sanitization." }
+
 $script:LogFile = $null
 
 function Ensure-Log {
@@ -306,7 +310,6 @@ try {
                 Log "Copied $name"
             }
         }
-        # automation.cmd from package; START_CONTROL_CENTER.cmd always from repo (robust launcher)
         $autoSrc = Join-Path $stage "automation.cmd"
         if (Test-Path $autoSrc) {
             Copy-Item -Force $autoSrc (Join-Path $Root "automation.cmd")
@@ -350,7 +353,7 @@ try {
     Log "Wrote $configPath"
 
     Step "Refreshing helper scripts from GitHub"
-    $rootScripts = @("START_CHROME_DEBUG.cmd", "START_CONTROL_CENTER.cmd")
+    $rootScripts = @("START_CHROME_DEBUG.cmd", "START_CONTROL_CENTER.cmd", "UPDATE_PLATFORM.cmd")
     $installerScripts = @("START_PLATFORM_INSTALLER.ps1","INSTALLER_CORE.ps1","START_INSTALLER_GUI.cmd","INSTALL_AutomationPlatform.bat","INSTALL_AutomationPlatform.ps1")
     foreach ($name in $rootScripts) {
         try {
@@ -364,8 +367,21 @@ try {
         } catch { Log "WARN: could not refresh $name" }
     }
 
-    $rootUpdateCmd = "@echo off`r`nsetlocal`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File ""%~dp0installer\START_PLATFORM_INSTALLER.ps1"" -DefaultRoot ""%~dp0""`r`nendlocal`r`n"
-    Set-Content -Encoding ASCII -Path (Join-Path $Root "UPDATE_PLATFORM.cmd") -Value $rootUpdateCmd
+    # Fallback if GitHub download of UPDATE_PLATFORM.cmd failed: write safe local version
+    $updateCmdPath = Join-Path $Root "UPDATE_PLATFORM.cmd"
+    if (-not (Test-Path $updateCmdPath)) {
+        $rootUpdateCmd = @(
+            '@echo off',
+            'setlocal EnableExtensions',
+            'cd /d "%~dp0"',
+            'set "ROOT=%~dp0"',
+            'if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"',
+            'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\installer\START_PLATFORM_INSTALLER.ps1" -DefaultRoot "%ROOT%"',
+            'endlocal'
+        ) -join "`r`n"
+        Set-Content -Encoding ASCII -Path $updateCmdPath -Value $rootUpdateCmd
+        Log "Wrote local fallback UPDATE_PLATFORM.cmd"
+    }
 
     Step "Done"
     Log "Root           : $Root"
@@ -375,7 +391,7 @@ try {
     Log "CDP            : ${cdpHost}:$debugPort"
     Log "Control Center : $(Join-Path $Root 'START_CONTROL_CENTER.cmd')"
     Log "Start Chrome   : $(Join-Path $Root 'START_CHROME_DEBUG.cmd')"
-    Log "Updater        : $(Join-Path $Root 'UPDATE_PLATFORM.cmd')"
+    Log "Updater        : $updateCmdPath"
     Log "Log file       : $script:LogFile"
     exit 0
 }
