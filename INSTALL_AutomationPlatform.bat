@@ -1,94 +1,89 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul
-title AutomationPlatform - Bootstrap Installer
 color 0B
+title AutomationPlatform - Install Update Repair
 
 set "TARGET_ROOT=D:\AutomationPlatform"
+if not "%~1"=="" set "TARGET_ROOT=%~1"
+if "%TARGET_ROOT:~-1%"=="\" set "TARGET_ROOT=%TARGET_ROOT:~0,-1%"
+
 set "REPO_RAW=https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main"
 set "MANIFEST_URL=%REPO_RAW%/platform_manifest.json"
 set "TEMP_BOOT=%TEMP%\AutomationPlatform_Bootstrap"
-set "PS1_FILE=%TEMP_BOOT%\START_PLATFORM_INSTALLER.ps1"
+set "RUNNER=%TEMP_BOOT%\BOOTSTRAP_RUNNER.ps1"
+
+if not exist "%TARGET_ROOT%" mkdir "%TARGET_ROOT%" 2>nul
+if not exist "%TARGET_ROOT%\logs" mkdir "%TARGET_ROOT%\logs" 2>nul
+if not exist "%TEMP_BOOT%" mkdir "%TEMP_BOOT%" 2>nul
 
 echo.
 echo ============================================================
-echo   AutomationPlatform - install from GitHub
+echo   AutomationPlatform - INSTALL / UPDATE / REPAIR
+echo ============================================================
+echo   Root : %TARGET_ROOT%
+echo   Repo : github.com/1777maxim7771/AutomationPlatform
+echo.
+echo   This BAT always downloads the newest bootstrap logic.
+echo   Existing healthy components are skipped automatically.
+echo   Missing, broken or outdated components are repaired/updated.
 echo ============================================================
 echo.
-echo   Target : %TARGET_ROOT%
-echo   Repo   : github.com/1777maxim7771/AutomationPlatform
-echo.
-echo ------------------------------------------------------------
-echo   1. Create folder
-echo   2. Download installer scripts
-echo   3. Python + Chrome + Control Center + profile
-echo   4. Show next steps
-echo ------------------------------------------------------------
-echo.
 
-where powershell >nul 2>nul
+where powershell.exe >nul 2>nul
 if errorlevel 1 (
-    echo [ERROR] PowerShell not found.
+    echo [ERROR] Windows PowerShell was not found.
     pause
     exit /b 1
 )
 
-echo [1/4] Temp folder...
-if exist "%TEMP_BOOT%" rmdir /s /q "%TEMP_BOOT%" 2>nul
-mkdir "%TEMP_BOOT%" 2>nul
-if not exist "%TEMP_BOOT%" (
-    echo [ERROR] Cannot create %TEMP_BOOT%
+echo [BOOTSTRAP] Downloading latest BOOTSTRAP_RUNNER.ps1 from GitHub...
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop'; "^
+  "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "^
+  "$u='%REPO_RAW%/BOOTSTRAP_RUNNER.ps1?nocache=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); "^
+  "$d='%RUNNER%'; "^
+  "New-Item -ItemType Directory -Force -Path (Split-Path -Parent $d) | Out-Null; "^
+  "Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $d; "^
+  "if (-not (Test-Path $d)) { throw 'BOOTSTRAP_RUNNER.ps1 was not downloaded.' }"
+
+if errorlevel 1 (
+    echo [ERROR] Cannot download bootstrap runner from GitHub.
+    echo         Check Internet access.
     pause
     exit /b 2
 )
 
-echo [2/4] Download START_PLATFORM_INSTALLER.ps1 ...
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $d = Join-Path $env:TEMP 'AutomationPlatform_Bootstrap'; New-Item -ItemType Directory -Force -Path $d | Out-Null; $f = Join-Path $d 'START_PLATFORM_INSTALLER.ps1'; $r = Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/START_PLATFORM_INSTALLER.ps1'; $enc = New-Object System.Text.UTF8Encoding $true; [System.IO.File]::WriteAllText($f, $r.Content, $enc); Unblock-File $f -ErrorAction SilentlyContinue; if (Test-Path $f) { exit 0 } else { exit 1 }"
-
-if errorlevel 1 (
-    echo [ERROR] Download failed. Check internet / GitHub access.
+if not exist "%RUNNER%" (
+    echo [ERROR] Missing downloaded bootstrap runner: %RUNNER%
     pause
-    exit /b 3
+    exit /b 2
 )
 
-if not exist "%PS1_FILE%" (
-    echo [ERROR] Installer file missing after download.
-    pause
-    exit /b 3
-)
-
-echo [3/4] Starting installer GUI...
-echo       Root: %TARGET_ROOT%
-echo       Press INSTALL / UPDATE in the window.
+echo [BOOTSTRAP] Starting latest install/update/repair logic...
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1_FILE%" -DefaultRoot "%TARGET_ROOT%" -ManifestUrl "%MANIFEST_URL%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%RUNNER%" -Root "%TARGET_ROOT%" -ManifestUrl "%MANIFEST_URL%"
 set "RC=%ERRORLEVEL%"
 
 echo.
-echo [4/4] Done
-echo ------------------------------------------------------------
 if not "%RC%"=="0" (
-    echo [ERROR] Installer exit code %RC%
+    echo ============================================================
+    echo [ERROR] AutomationPlatform operation failed. Exit code %RC%
+    echo [LOGS ] %TARGET_ROOT%\logs
+    echo [LATEST] %TARGET_ROOT%\logs\latest_bootstrap.log
+    echo ============================================================
     pause
     exit /b %RC%
 )
 
-echo [OK] Install finished.
-echo.
-echo Next steps:
-echo   Control Center : %TARGET_ROOT%\START_CONTROL_CENTER.cmd
-echo   Update         : %TARGET_ROOT%\UPDATE_PLATFORM.cmd
-echo   Logs           : %TARGET_ROOT%\logs
+echo ============================================================
+echo [OK] AutomationPlatform is installed / updated / repaired.
+echo [LOGS] %TARGET_ROOT%\logs
+if exist "%TARGET_ROOT%\data\platform_status.json" echo [STATUS] %TARGET_ROOT%\data\platform_status.json
+echo ============================================================
 echo.
 
-if exist "%TARGET_ROOT%\START_CONTROL_CENTER.cmd" (
-    choice /C YN /M "Open Control Center now"
-    if not errorlevel 2 start "" "%TARGET_ROOT%\START_CONTROL_CENTER.cmd"
-)
-
-echo.
-pause
 endlocal
 exit /b 0
