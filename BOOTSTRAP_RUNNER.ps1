@@ -67,13 +67,12 @@ try {
     )
 
     Log "Starting Installer Core"
-    $coreOutput = & powershell.exe @args 2>&1
-    $coreExit = $LASTEXITCODE
-    foreach ($line in $coreOutput) {
-        $text = [string]$line
+    & powershell.exe @args 2>&1 | ForEach-Object {
+        $text = [string]$_
         Write-Host $text
         Add-Content -Encoding UTF8 -Path $logFile -Value "[CORE] $text"
     }
+    $coreExit = $LASTEXITCODE
 
     if ($coreExit -ne 0) {
         throw "Installer Core failed with exit code $coreExit"
@@ -84,15 +83,14 @@ try {
         try {
             $status = Get-Content -Raw -Encoding UTF8 $statusPath | ConvertFrom-Json
             Log "Health overall=$($status.overall_status)"
-            Log "Python status=$($status.components.python.status), version=$($status.components.python.installed_version), tkinter=$($status.components.python.tkinter)"
-            Log "Chrome status=$($status.components.chrome.status), version=$($status.components.chrome.installed_version)"
-            Log "ControlCenter status=$($status.components.control_center.status), version=$($status.components.control_center.installed_version)"
+            Log "Python status=$($status.components.python.status), action=$($status.components.python.action), version=$($status.components.python.installed_version), tkinter=$($status.components.python.tkinter)"
+            Log "Chrome status=$($status.components.chrome.status), action=$($status.components.chrome.action), version=$($status.components.chrome.installed_version)"
+            Log "ControlCenter status=$($status.components.control_center.status), action=$($status.components.control_center.action), version=$($status.components.control_center.installed_version)"
         } catch {
             Log "Could not parse platform_status.json: $($_.Exception.Message)" "WARN"
         }
     }
 
-    Copy-Item -Force $logFile $latestLog
     Log "Bootstrap completed successfully"
 
     if (-not $NoLaunch) {
@@ -105,6 +103,7 @@ try {
         }
     }
 
+    Copy-Item -Force $logFile $latestLog
     exit 0
 }
 catch {
