@@ -102,7 +102,6 @@ function Install-GoogleChrome([string]$DownloadsDir, [string]$InstallerUrl, [str
     if ($Kind -eq "msi") {
         $p = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$pkg`"", "/qn", "/norestart") -Wait -PassThru
         Log "msiexec exit code: $($p.ExitCode)"
-        # 0 = success, 3010 = success reboot required
         if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
             throw "Google Chrome MSI install failed with exit code $($p.ExitCode)"
         }
@@ -232,7 +231,6 @@ try {
         }
     }
 
-    # ---- Google Chrome is MANDATORY (no Chrome for Testing) ----
     Step "Resolving official Google Chrome (required)"
     $chromeExe = Find-SystemChrome
     $chromeSource = ""
@@ -308,9 +306,11 @@ try {
                 Log "Copied $name"
             }
         }
-        foreach ($name in @("START_CONTROL_CENTER.cmd","automation.cmd")) {
-            $src = Join-Path $stage $name
-            if (Test-Path $src) { Copy-Item -Force $src (Join-Path $Root $name); Log "Copied $name" }
+        # automation.cmd from package; START_CONTROL_CENTER.cmd always from repo (robust launcher)
+        $autoSrc = Join-Path $stage "automation.cmd"
+        if (Test-Path $autoSrc) {
+            Copy-Item -Force $autoSrc (Join-Path $Root "automation.cmd")
+            Log "Copied automation.cmd"
         }
         $svSrc = Join-Path $stage "data\shared_values.json"
         $svDst = Join-Path $Root "data\shared_values.json"
@@ -349,14 +349,18 @@ try {
     $config | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 $configPath
     Log "Wrote $configPath"
 
-    Step "Refreshing helper scripts"
-    foreach ($name in @("START_PLATFORM_INSTALLER.ps1","INSTALLER_CORE.ps1","START_INSTALLER_GUI.cmd","INSTALL_AutomationPlatform.bat","INSTALL_AutomationPlatform.ps1","START_CHROME_DEBUG.cmd")) {
+    Step "Refreshing helper scripts from GitHub"
+    $rootScripts = @("START_CHROME_DEBUG.cmd", "START_CONTROL_CENTER.cmd")
+    $installerScripts = @("START_PLATFORM_INSTALLER.ps1","INSTALLER_CORE.ps1","START_INSTALLER_GUI.cmd","INSTALL_AutomationPlatform.bat","INSTALL_AutomationPlatform.ps1")
+    foreach ($name in $rootScripts) {
         try {
-            if ($name -eq "START_CHROME_DEBUG.cmd") {
-                Download ($rawBase + $name) (Join-Path $Root $name)
-            } else {
-                Download ($rawBase + $name) (Join-Path $installerDir $name)
-            }
+            Download ($rawBase + $name) (Join-Path $Root $name)
+            Log "Deployed root launcher: $name"
+        } catch { Log "WARN: could not refresh $name" }
+    }
+    foreach ($name in $installerScripts) {
+        try {
+            Download ($rawBase + $name) (Join-Path $installerDir $name)
         } catch { Log "WARN: could not refresh $name" }
     }
 
@@ -369,6 +373,7 @@ try {
     Log "Chrome         : $chromeExe (source=$chromeSource)"
     Log "Chrome Profile : $profile"
     Log "CDP            : ${cdpHost}:$debugPort"
+    Log "Control Center : $(Join-Path $Root 'START_CONTROL_CENTER.cmd')"
     Log "Start Chrome   : $(Join-Path $Root 'START_CHROME_DEBUG.cmd')"
     Log "Updater        : $(Join-Path $Root 'UPDATE_PLATFORM.cmd')"
     Log "Log file       : $script:LogFile"
