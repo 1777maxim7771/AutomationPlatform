@@ -11,12 +11,11 @@
 | `UPDATE_PLATFORM.cmd` | Обновление: тянет скрипты с GitHub и ставит/чинит всё |
 | `START_PLATFORM_INSTALLER.ps1` | GUI установщика |
 | `INSTALLER_CORE.ps1` | Логика установки (Python+tkinter, Chrome, Control Center) |
+| `REPAIR_PYTHON_RUNTIME.ps1` | Автоматический ремонт локального Python, если отсутствует `tkinter` |
 | `platform_manifest.json` | Версии и настройки |
-| `START_CONTROL_CENTER.cmd` | Запуск GUI (`control_center\gui.py`) |
+| `START_CONTROL_CENTER.cmd` | Запуск GUI (`control_center\gui.py`) + проверка/саморемонт `tkinter` |
 | `START_CHROME_DEBUG.cmd` | Chrome с CDP :9222 |
 | `packages/AutomationPlatform_ControlCenter_v0.4.0.zip` | Пакет Control Center |
-
-Отдельных fix-скриптов нет: починка входит в UPDATE.
 
 ## Первая установка
 
@@ -37,6 +36,16 @@ D:\AutomationPlatform\UPDATE_PLATFORM.cmd
 - проверяет **официальный Google Chrome**;
 - обновляет Control Center и лаунчеры;
 - не трогает `browser\Chrome_Profile`, secrets, modules, jobs, logs.
+
+## Саморемонт tkinter при запуске Control Center
+
+`START_CONTROL_CENTER.cmd` сначала выполняет проверку:
+
+```cmd
+python.exe -c "import tkinter"
+```
+
+Если локальный Python существует, но `tkinter` отсутствует, лаунчер автоматически скачивает актуальный `REPAIR_PYTHON_RUNTIME.ps1`. Repair-скрипт получает свежий `INSTALLER_CORE.ps1` и переустанавливает **только проектный Python runtime** как полный CPython с Tcl/Tk. После ремонта `tkinter` проверяется повторно и только затем запускается `control_center\gui.py`.
 
 Если локальный `UPDATE_PLATFORM.cmd` ещё старый, один раз:
 
