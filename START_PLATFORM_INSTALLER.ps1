@@ -13,6 +13,32 @@ Add-Type -AssemblyName System.Drawing
 $RepoRawBase = "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main"
 $InstallerCoreUrl = "$RepoRawBase/INSTALLER_CORE.ps1"
 
+function Sanitize-Path([string]$PathValue) {
+    if ([string]::IsNullOrWhiteSpace($PathValue)) { return "" }
+    $p = $PathValue.Trim()
+    # Remove surrounding or embedded quotes that break Windows path APIs
+    $p = $p.Trim([char]0x22, [char]0x27)  # " and '
+    $p = $p -replace '["'']', ''
+    $p = $p.Trim()
+    # Normalize trailing dots/spaces (invalid on Windows)
+    $p = $p.TrimEnd('.', ' ')
+    return $p
+}
+
+function Test-ValidWindowsPath([string]$PathValue) {
+    if ([string]::IsNullOrWhiteSpace($PathValue)) { return $false }
+    # Drive path like D:\... or UNC \\server\share
+    if ($PathValue -notmatch '^[A-Za-z]:[\\/]' -and $PathValue -notmatch '^\\\\[^\\]+\\[^\\]+') {
+        return $false
+    }
+    $invalid = [System.IO.Path]::GetInvalidPathChars()
+    foreach ($ch in $PathValue.ToCharArray()) {
+        if ($invalid -contains $ch) { return $false }
+        if ($ch -eq [char]0x22 -or $ch -eq [char]0x3C -or $ch -eq [char]0x3E -or $ch -eq [char]0x7C) { return $false }
+    }
+    return $true
+}
+
 function Get-LatestInstallerCore {
     param([string]$Destination)
 
@@ -37,6 +63,13 @@ function Get-LatestLog([string]$Root) {
     if ($latest) { return $latest.FullName }
     return $null
 }
+
+# Clean DefaultRoot coming from UPDATE_PLATFORM.cmd (%~dp0 may include trailing \)
+$DefaultRoot = Sanitize-Path $DefaultRoot
+if ($DefaultRoot.EndsWith('\') -or $DefaultRoot.EndsWith('/')) {
+    $DefaultRoot = $DefaultRoot.TrimEnd('\', '/')
+}
+if (-not $DefaultRoot) { $DefaultRoot = "D:\AutomationPlatform" }
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "AutomationPlatform - Initial Setup / Update"
@@ -99,7 +132,7 @@ $cbPython.Location = New-Object System.Drawing.Point(32, 274)
 $form.Controls.Add($cbPython)
 
 $cbChrome = New-Object System.Windows.Forms.CheckBox
-$cbChrome.Text = "Chrome for Testing / Debug runtime"
+$cbChrome.Text = "Ensure official Google Chrome (required)"
 $cbChrome.Checked = $true
 $cbChrome.AutoSize = $true
 $cbChrome.Location = New-Object System.Drawing.Point(32, 307)
@@ -144,11 +177,20 @@ $form.Controls.Add($btn)
 
 $btn.Add_Click({
     try {
-        $root = $txtRoot.Text.Trim()
-        $manifest = $txtManifest.Text.Trim()
+        $root = Sanitize-Path $txtRoot.Text
+        $manifest = $txtManifest.Text.Trim().Trim([char]0x22, [char]0x27)
+
+        # Reflect cleaned path back into the UI
+        $txtRoot.Text = $root
 
         if (-not $root) {
             [System.Windows.Forms.MessageBox]::Show("Specify install root folder.") | Out-Null
+            return
+        }
+        if (-not (Test-ValidWindowsPath $root)) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Invalid install path:`n$root`n`nUse a normal folder path, e.g. D:\AutomationPlatform`nDo not include quotes."
+            ) | Out-Null
             return
         }
         if (-not $manifest) {
@@ -159,25 +201,33 @@ $btn.Add_Click({
         New-Item -ItemType Directory -Force -Path $root | Out-Null
         New-Item -ItemType Directory -Force -Path (Join-Path $root "logs") | Out-Null
 
-        $tempCore = Join-Path $env:TEMP "AutomationPlatformBootstrap\INSTALLER_CORE.ps1"
+        $tempDir = Join-Path $env:TEMP "AutomationPlatformBootstrap"
+        New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+        $tempCore = Join-Path $tempDir "INSTALLER_CORE.ps1"
+
         $status.Text = "Downloading Installer Core from GitHub..."
         $form.Refresh()
         Get-LatestInstallerCore -Destination $tempCore
 
-        $switches = @()
-        if ($cbPython.Checked)  { $switches += "-InstallPython" }
-        if ($cbChrome.Checked)  { $switches += "-InstallChrome" }
-        if ($cbControl.Checked) { $switches += "-InstallControlCenter" }
-        if ($cbProfile.Checked) { $switches += "-CreateChromeProfile" }
-        $switchStr = ($switches -join " ")
-
-        # Single argument string is more reliable with Start-Process on WinPS 5.1
-        $argStr = "-NoProfile -ExecutionPolicy Bypass -File `"$tempCore`" -Root `"$root`" -ManifestUrl `"$manifest`" $switchStr"
+        $argList = [System.Collections.Generic.List[string]]::new()
+        $argList.Add("-NoProfile")
+        $argList.Add("-ExecutionPolicy")
+        $argList.Add("Bypass")
+        $argList.Add("-File")
+        $argList.Add($tempCore)
+        $argList.Add("-Root")
+        $argList.Add($root)
+        $argList.Add("-ManifestUrl")
+        $argList.Add($manifest)
+        if ($cbPython.Checked)  { $argList.Add("-InstallPython") }
+        if ($cbChrome.Checked)  { $argList.Add("-InstallChrome") }
+        if ($cbControl.Checked) { $argList.Add("-InstallControlCenter") }
+        if ($cbProfile.Checked) { $argList.Add("-CreateChromeProfile") }
 
         $status.Text = "Installing... watch the black console window for progress."
         $form.Refresh()
 
-        $p = Start-Process -FilePath "powershell.exe" -ArgumentList $argStr -Wait -PassThru
+        $p = Start-Process -FilePath "powershell.exe" -ArgumentList $argList.ToArray() -Wait -PassThru
 
         $logPath = Get-LatestLog $root
 
