@@ -1,5 +1,5 @@
 {
-  "schema_version": 12,
+  "schema_version": 13,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
   "repository": {
@@ -8,6 +8,16 @@
     "branch": "main",
     "url": "https://github.com/1777maxim7771/AutomationPlatform",
     "raw_base": "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/"
+  },
+  "shell": {
+    "version": "0.1.0",
+    "source": "CONTROL_CENTER_SHELL.py",
+    "installed_path": "control_center\\shell.py",
+    "module_ui_api": 1,
+    "single_window": true,
+    "cache_module_views": true,
+    "dynamic_module_menu": true,
+    "module_catalog": "modules_catalog.json"
   },
   "installer": {
     "bootstrap_bat": "INSTALL_AutomationPlatform.bat",
@@ -98,7 +108,10 @@
       "install_directory": "modules\\dynamic_conversation_exporter",
       "default_install": false,
       "auto_update_if_installed": true,
-      "description": "ChatGPT conversation export module using the shared AutomationPlatform Chrome Debug/CDP connection."
+      "ui_mode": "embedded",
+      "ui_api": 1,
+      "single_window": true,
+      "description": "ChatGPT conversation export module using the shared AutomationPlatform Chrome Debug/CDP connection and embedded single-window panel."
     }
   },
   "defaults": {
