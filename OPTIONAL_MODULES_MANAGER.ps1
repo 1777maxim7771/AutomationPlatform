@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ManagerVersion = "2026.07.27.3"
+$ManagerVersion = "2026.07.27.4"
 
 $Root = $Root.Trim().Trim([char]0x22,[char]0x27).TrimEnd('\','/').Trim()
 if(-not $Root){ throw "Root path is empty." }
@@ -33,18 +33,24 @@ function Log([string]$Text,[string]$Level="INFO"){
     Add-Content -Encoding UTF8 -Path $logFile -Value $line
 }
 function Action([string]$Id,[string]$Action,[string]$Text){ Log "[MODULE:$Id][$Action] $Text" }
-function Get-Json([string]$Url){
+function Add-CacheBuster([string]$Url){
     $sep = if($Url -match '\?'){'&'}else{'?'}
-    Invoke-RestMethod -Uri "$Url$sep`nocache=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+    return ("{0}{1}nocache={2}" -f $Url,$sep,[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+}
+function Get-Json([string]$Url){
+    $fetch = Add-CacheBuster $Url
+    Log "GET JSON $fetch"
+    Invoke-RestMethod -Uri $fetch
 }
 function Download([string]$Url,[string]$Dest){
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Dest) | Out-Null
-    $sep = if($Url -match '\?'){'&'}else{'?'}
-    $fetch = "$Url$sep`nocache=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+    $fetch = Add-CacheBuster $Url
     Log "DOWNLOAD $fetch"
     Invoke-WebRequest -UseBasicParsing -Uri $fetch -OutFile $Dest
     if(-not(Test-Path $Dest)){ throw "Download failed: $Url" }
-    Log ("DOWNLOADED {0} bytes -> {1}" -f (Get-Item $Dest).Length,$Dest)
+    $size = (Get-Item $Dest).Length
+    if($size -le 0){ throw "Downloaded file is empty: $Url" }
+    Log ("DOWNLOADED {0} bytes -> {1}" -f $size,$Dest)
 }
 function Resolve-RawUrl([string]$BaseUrl,[string]$Relative){
     (New-Object System.Uri([Uri]$BaseUrl,([string]$Relative).Replace('\','/'))).AbsoluteUri
@@ -195,39 +201,61 @@ function Sync-EmbeddedIntegration($Remote,[string]$Target,[string]$Id){
 function Get-ModulePackage($Remote,[string]$Id){
     $version = [string]$Remote.version
     $package = Join-Path $downloadsDir ("{0}-{1}.zip" -f $Id,$version)
-    $expected = ([string]$Remote.package_sha256).ToLowerInvariant()
+    $expectedHash = ([string]$Remote.package_sha256).ToLowerInvariant()
+    $expectedSize = 0L
+    try { $expectedSize = [int64]$Remote.package_size_bytes } catch {}
 
-    if((Test-Path $package) -and $expected){
-        $cached = (Get-FileHash -Algorithm SHA256 -Path $package).Hash.ToLowerInvariant()
-        if($cached -eq $expected){
-            Action $Id 'PACKAGE_CACHE' "Valid cached package reused: $package"
+    if(Test-Path $package){
+        $cachedSize = (Get-Item $package).Length
+        $cachedHash = (Get-FileHash -Algorithm SHA256 -Path $package).Hash.ToLowerInvariant()
+        if(((-not $expectedHash) -or $cachedHash -eq $expectedHash) -and (($expectedSize -le 0) -or $cachedSize -eq $expectedSize)){
+            Action $Id 'PACKAGE_CACHE' "Valid cached package reused: size=$cachedSize sha256=$cachedHash"
             return $package
         }
+        Action $Id 'PACKAGE_CACHE_INVALID' "Removing stale cache: size=$cachedSize sha256=$cachedHash"
+        Remove-Item -Force $package -ErrorAction SilentlyContinue
     }
 
     $parts = @($Remote.package_parts)
     if($parts.Count -lt 1){ throw "Module manifest has no package_parts." }
-    $builder = New-Object System.Text.StringBuilder
-    $i = 0
-    foreach($part in $parts){
-        $i++
-        $url = Resolve-RawUrl ([string]$Remote._manifest_url) ([string]$part)
-        $partFile = Join-Path $downloadsDir ("{0}-{1}-part{2:D2}.b64" -f $Id,$version,$i)
-        Action $Id 'DOWNLOAD' "Package part $i/$($parts.Count)"
-        Download $url $partFile
-        [void]$builder.Append(((Get-Content -Raw -Encoding UTF8 $partFile) -replace '\s',''))
-    }
 
-    try { [IO.File]::WriteAllBytes($package,[Convert]::FromBase64String($builder.ToString())) }
-    catch { throw "Could not decode module package: $($_.Exception.Message)" }
+    for($attempt=1; $attempt -le 2; $attempt++){
+        $builder = New-Object System.Text.StringBuilder
+        $i = 0
+        foreach($part in $parts){
+            $i++
+            $url = Resolve-RawUrl ([string]$Remote._manifest_url) ([string]$part)
+            $partFile = Join-Path $downloadsDir ("{0}-{1}-part{2:D2}.b64" -f $Id,$version,$i)
+            Remove-Item -Force $partFile -ErrorAction SilentlyContinue
+            Action $Id 'DOWNLOAD' "Package part $i/$($parts.Count), attempt $attempt/2"
+            Download $url $partFile
+            $partText = (Get-Content -Raw -Encoding UTF8 $partFile) -replace '\s',''
+            if([string]::IsNullOrWhiteSpace($partText)){ throw "Downloaded package part is empty: $part" }
+            [void]$builder.Append($partText)
+        }
 
-    $actual = (Get-FileHash -Algorithm SHA256 -Path $package).Hash.ToLowerInvariant()
-    if($expected -and $actual -ne $expected){
+        try { [IO.File]::WriteAllBytes($package,[Convert]::FromBase64String($builder.ToString())) }
+        catch { throw "Could not decode module package: $($_.Exception.Message)" }
+
+        $actualSize = (Get-Item $package).Length
+        $actualHash = (Get-FileHash -Algorithm SHA256 -Path $package).Hash.ToLowerInvariant()
+        $sizeOk = ($expectedSize -le 0) -or ($actualSize -eq $expectedSize)
+        $hashOk = (-not $expectedHash) -or ($actualHash -eq $expectedHash)
+
+        if($sizeOk -and $hashOk){
+            Action $Id 'PACKAGE_OK' "Size=$actualSize SHA-256=$actualHash"
+            return $package
+        }
+
+        Action $Id 'PACKAGE_VERIFY_FAILED' "Attempt=$attempt ExpectedSize=$expectedSize ActualSize=$actualSize ExpectedSHA=$expectedHash ActualSHA=$actualHash"
         Remove-Item -Force $package -ErrorAction SilentlyContinue
-        throw "Module package SHA-256 mismatch. Expected=$expected Actual=$actual"
+        if($attempt -lt 2){
+            Action $Id 'PACKAGE_RETRY' 'Verification failed; re-downloading every package part once.'
+            Start-Sleep -Milliseconds 350
+        }
     }
-    Action $Id 'PACKAGE_OK' "SHA-256=$actual"
-    $package
+
+    throw "Module package verification failed after retry. ExpectedSize=$expectedSize ExpectedSHA=$expectedHash"
 }
 function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall){
     $id = [string]$Definition.id
@@ -265,7 +293,14 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
     $rollback = Join-Path $stageRoot ($id + '_rollback')
     Remove-Item -Recurse -Force $stage,$rollback -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
-    Expand-Archive -Path $package -DestinationPath $stage -Force
+
+    try {
+        Expand-Archive -Path $package -DestinationPath $stage -Force
+    } catch {
+        Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+        Remove-Item -Force $package -ErrorAction SilentlyContinue
+        throw "Module package archive is invalid: $($_.Exception.Message)"
+    }
     if(-not(Test-RequiredFiles $stage $required)){ throw "Staged module is incomplete; required files are missing." }
 
     if($installed){ Copy-Preserved $target $backup @($remote.preserve_on_update) }
