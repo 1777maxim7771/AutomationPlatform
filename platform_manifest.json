@@ -1,5 +1,5 @@
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
   "repository": {
@@ -17,6 +17,7 @@
     "python_runtime_manager": "PYTHON_RUNTIME_MANAGER.ps1",
     "chrome_runtime_manager": "CHROME_RUNTIME_MANAGER.ps1",
     "platform_finalizer": "PLATFORM_FINALIZER.ps1",
+    "optional_modules_manager": "OPTIONAL_MODULES_MANAGER.ps1",
     "legacy_core": "INSTALLER_CORE.ps1",
     "mode": "install_update_repair",
     "always_refresh_installer_ui": true,
@@ -86,6 +87,19 @@
       "%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe",
       "%LocalAppData%\\Google\\Chrome\\Application\\chrome.exe"
     ]
+  },
+  "optional_modules": {
+    "dynamic_conversation_exporter": {
+      "id": "dynamic_conversation_exporter",
+      "name": "Dynamic Conversation Exporter",
+      "version": "1.5.0",
+      "repository": "https://github.com/1777maxim7771/Dynamic_Conversation_Exporter",
+      "manifest_url": "https://raw.githubusercontent.com/1777maxim7771/Dynamic_Conversation_Exporter/main/module_manifest.json",
+      "install_directory": "modules\\dynamic_conversation_exporter",
+      "default_install": false,
+      "auto_update_if_installed": true,
+      "description": "ChatGPT conversation export module using the shared AutomationPlatform Chrome Debug/CDP connection."
+    }
   },
   "defaults": {
     "install_root": "D:\\AutomationPlatform",
