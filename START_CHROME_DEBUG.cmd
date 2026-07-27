@@ -11,9 +11,14 @@ set "PROFILE=%ROOT%\browser\Chrome_Profile"
 set "PORT=9222"
 set "CHROME="
 set "START_URL="
+set "URL_SOURCE="
 
-REM Optional URL supplied by GUI/CLI has highest priority.
-if not "%~1"=="" set "START_URL=%~1"
+REM An explicit URL supplied by a module/GUI/CLI has highest priority.
+REM It is an intentional request, not a platform default.
+if not "%~1"=="" (
+  set "START_URL=%~1"
+  set "URL_SOURCE=ARG"
+)
 
 REM Read platform config (Chrome path/profile/port) when available.
 if exist "%CONFIG%" (
@@ -22,14 +27,19 @@ if exist "%CONFIG%" (
   for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "try { (Get-Content -Raw '%CONFIG%' | ConvertFrom-Json).debug_port } catch {''}"`) do if not "%%A"=="" set "PORT=%%A"
 )
 
-REM If GUI/CLI did not supply a URL, read browser.start_url from shared values.
+REM If GUI/CLI/module did not supply a URL, read browser.start_url from shared values.
 if not defined START_URL if exist "%VALUES%" (
   for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "try { $j=Get-Content -Raw '%VALUES%' ^| ConvertFrom-Json; [string]$j.values.'browser.start_url' } catch {''}"`) do set "START_URL=%%A"
+  if defined START_URL set "URL_SOURCE=STORED"
 )
 
-REM Remove the historical ChatGPT hard-coded default. It is no longer a platform default.
-if /I "!START_URL!"=="https://chatgpt.com" set "START_URL="
-if /I "!START_URL!"=="https://chatgpt.com/" set "START_URL="
+REM Remove only the historical STORED ChatGPT default.
+REM An explicit module request such as START_CHROME_DEBUG.cmd https://chatgpt.com/
+REM must remain valid because the module intentionally needs ChatGPT.
+if /I not "!URL_SOURCE!"=="ARG" (
+  if /I "!START_URL!"=="https://chatgpt.com" set "START_URL="
+  if /I "!START_URL!"=="https://chatgpt.com/" set "START_URL="
+)
 
 REM Ask the user only when no URL is configured anywhere.
 if not defined START_URL (
@@ -42,6 +52,7 @@ if not defined START_URL (
   echo  Example: example.com  or  https://example.com/path
   echo.
   set /p "START_URL=Website: "
+  if defined START_URL set "URL_SOURCE=PROMPT"
 )
 
 if not defined START_URL (
@@ -77,6 +88,7 @@ echo  Chrome : %CHROME%
 echo  Profile: %PROFILE%
 echo  CDP    : http://127.0.0.1:%PORT%
 echo  URL    : !START_URL!
+echo  Source : !URL_SOURCE!
 echo ============================================================
 echo.
 
