@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ManagerVersion = "2026.07.27.4"
+$ManagerVersion = "2026.07.27.5"
 
 $Root = $Root.Trim().Trim([char]0x22,[char]0x27).TrimEnd('\','/').Trim()
 if(-not $Root){ throw "Root path is empty." }
@@ -55,28 +55,86 @@ function Download([string]$Url,[string]$Dest){
 function Resolve-RawUrl([string]$BaseUrl,[string]$Relative){
     (New-Object System.Uri([Uri]$BaseUrl,([string]$Relative).Replace('\','/'))).AbsoluteUri
 }
+function Read-JsonFile([string]$Path){
+    if(Test-Path $Path){
+        try { return (Get-Content -Raw -Encoding UTF8 $Path | ConvertFrom-Json) } catch { return $null }
+    }
+    return $null
+}
 function Get-InstalledVersion([string]$Target){
     $meta = Join-Path $Target 'module.json'
     if(-not(Test-Path $meta)){ return $null }
-    try { [string]((Get-Content -Raw -Encoding UTF8 $meta | ConvertFrom-Json).version) } catch { $null }
+    try { return [string]((Get-Content -Raw -Encoding UTF8 $meta | ConvertFrom-Json).version) } catch { return $null }
 }
 function Test-RequiredFiles([string]$Base,$Required){
     foreach($rel in @($Required)){
         if(-not(Test-Path (Join-Path $Base ([string]$rel)))){ return $false }
     }
-    $true
+    return $true
 }
-function Read-JsonFile([string]$Path){
-    if(Test-Path $Path){ try { Get-Content -Raw -Encoding UTF8 $Path | ConvertFrom-Json } catch { $null } }
-}
-function Test-ModuleImports([string]$PythonExe){
-    if(-not(Test-Path $PythonExe)){ return $false }
+
+# Native tools such as pip legitimately write warnings to STDERR even when they
+# exit with code 0. Windows PowerShell 5.1 converts STDERR records into
+# NativeCommandError objects; with global ErrorActionPreference=Stop that can
+# incorrectly abort the installer. This wrapper treats the native exit code as
+# authoritative and only logs STDERR/STDOUT as text.
+function Invoke-NativeLogged(
+    [string]$FilePath,
+    [object[]]$Arguments,
+    [string]$Prefix,
+    [switch]$Quiet
+){
+    if(-not(Test-Path $FilePath) -and $FilePath -notmatch '^[A-Za-z0-9_.-]+$'){
+        throw "Native executable is missing: $FilePath"
+    }
+
+    $oldPreference = $ErrorActionPreference
+    $captured = @()
+    $exitCode = 1
     try {
-        & $PythonExe -c "import playwright, markdownify; import pyvda" 2>$null
-        return ($LASTEXITCODE -eq 0)
-    } catch { return $false }
+        $ErrorActionPreference = 'Continue'
+        $captured = @(& $FilePath @Arguments 2>&1)
+        $exitCode = [int]$LASTEXITCODE
+    } catch {
+        $captured += $_.Exception.Message
+        $exitCode = 1
+    } finally {
+        $ErrorActionPreference = $oldPreference
+    }
+
+    if(-not $Quiet){
+        foreach($item in @($captured)){
+            if($null -eq $item){ continue }
+            $text = ([string]$item).TrimEnd()
+            if($text){ Log ("[{0}] {1}" -f $Prefix,$text) }
+        }
+    }
+    return $exitCode
 }
-function Ensure-Requirements([string]$Id,[string]$PythonExe,[string]$RequirementsPath){
+
+function Test-ModuleImports([string]$PythonExe,$Imports){
+    if(-not(Test-Path $PythonExe)){ return $false }
+    $names = @($Imports | Where-Object { $_ -and ([string]$_).Trim() })
+    if($names.Count -eq 0){ return $true }
+    $code = (($names | ForEach-Object { "import " + ([string]$_).Trim() }) -join '; ')
+    $rc = Invoke-NativeLogged -FilePath $PythonExe -Arguments @('-c',$code) -Prefix 'import-check' -Quiet
+    return ($rc -eq 0)
+}
+
+function Save-DependencyState([string]$Id,[string]$Hash){
+    $state = Read-JsonFile $depsStatePath
+    $all = [ordered]@{}
+    if($state){ foreach($p in $state.PSObject.Properties){ $all[$p.Name] = $p.Value } }
+    $all[$Id] = [ordered]@{
+        requirements_sha256 = $Hash
+        verified_at = (Get-Date).ToString('o')
+        python = (Join-Path $Root 'runtime\python\python.exe')
+        pip_check = 'ok'
+    }
+    $all | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $depsStatePath
+}
+
+function Ensure-Requirements([string]$Id,[string]$PythonExe,[string]$RequirementsPath,$Imports){
     if(-not(Test-Path $RequirementsPath)){
         Action $Id 'DEPENDENCIES_SKIP' 'requirements.txt is not present.'
         return
@@ -88,22 +146,42 @@ function Ensure-Requirements([string]$Id,[string]$PythonExe,[string]$Requirement
     $oldHash = $null
     try { $oldHash = [string]$state.$Id.requirements_sha256 } catch {}
 
-    if((Test-ModuleImports $PythonExe) -and $oldHash -eq $hash){
-        Action $Id 'DEPENDENCIES_SKIP' "Already healthy. requirements_sha256=$hash"
-        return
+    $importsOk = Test-ModuleImports $PythonExe $Imports
+    if($importsOk -and $oldHash -eq $hash){
+        $checkRc = Invoke-NativeLogged -FilePath $PythonExe -Arguments @('-m','pip','check') -Prefix 'pip-check' -Quiet
+        if($checkRc -eq 0){
+            Action $Id 'DEPENDENCIES_SKIP' "Already healthy. requirements_sha256=$hash"
+            return
+        }
+        Action $Id 'DEPENDENCIES_REPAIR' 'Recorded dependencies exist, but pip check reports a conflict. Repairing.'
     }
 
     Action $Id 'DEPENDENCIES_INSTALL' "Installing requirements with platform-local Python. hash=$hash"
-    & $PythonExe -m pip install -r $RequirementsPath 2>&1 | ForEach-Object { Log ("[pip] " + [string]$_) }
-    if($LASTEXITCODE -ne 0){ throw "Python requirements installation failed for module $Id." }
-    if(-not(Test-ModuleImports $PythonExe)){ throw "Module Python dependency verification failed after pip install." }
+    $pipArgs = @(
+        '-m','pip','install',
+        '--disable-pip-version-check',
+        '--no-warn-script-location',
+        '--upgrade-strategy','only-if-needed',
+        '-r',$RequirementsPath
+    )
+    $pipRc = Invoke-NativeLogged -FilePath $PythonExe -Arguments $pipArgs -Prefix 'pip'
+    if($pipRc -ne 0){
+        throw "Python requirements installation failed for module $Id. pip exit code=$pipRc"
+    }
 
-    $all = [ordered]@{}
-    if($state){ foreach($p in $state.PSObject.Properties){ $all[$p.Name] = $p.Value } }
-    $all[$Id] = [ordered]@{ requirements_sha256=$hash; verified_at=(Get-Date).ToString('o') }
-    $all | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $depsStatePath
-    Action $Id 'DEPENDENCIES_OK' 'Python requirements verified.'
+    if(-not(Test-ModuleImports $PythonExe $Imports)){
+        throw "Module Python dependency import verification failed after pip install."
+    }
+
+    $checkRc = Invoke-NativeLogged -FilePath $PythonExe -Arguments @('-m','pip','check') -Prefix 'pip-check'
+    if($checkRc -ne 0){
+        throw "Python dependency conflict detected after installing module $Id. pip check exit code=$checkRc"
+    }
+
+    Save-DependencyState $Id $hash
+    Action $Id 'DEPENDENCIES_OK' 'Requirements installed; imports and pip check are healthy.'
 }
+
 function Copy-Preserved([string]$Target,[string]$Backup,$Items){
     Remove-Item -Recurse -Force $Backup -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $Backup | Out-Null
@@ -129,17 +207,24 @@ function Restore-Preserved([string]$Backup,[string]$Target,$Items){
         }
     }
 }
+
 function Write-RootLauncher([string]$Target){
     $launcher = Join-Path $Root 'START_DYNAMIC_CONVERSATION_EXPORTER.cmd'
     $entry = Join-Path $Target '00_START_ALL.cmd'
+    $pythonDir = Join-Path $Root 'runtime\python'
+    $pythonExe = Join-Path $pythonDir 'python.exe'
+    $pythonScripts = Join-Path $pythonDir 'Scripts'
     $lines = @(
         '@echo off',
         'setlocal EnableExtensions',
         ('set "AUTOMATION_PLATFORM_ROOT={0}"' -f $Root),
-        ('set "AUTOMATION_PLATFORM_PYTHON={0}"' -f (Join-Path $Root 'runtime\python\python.exe')),
+        ('set "AUTOMATION_PLATFORM_MODULE_ROOT={0}"' -f $Target),
+        'set "AUTOMATION_PLATFORM_MODULE_ID=dynamic_conversation_exporter"',
+        ('set "AUTOMATION_PLATFORM_PYTHON={0}"' -f $pythonExe),
         ('set "AUTOMATION_PLATFORM_PROFILE={0}"' -f (Join-Path $Root 'browser\Chrome_Profile')),
         'set "AUTOMATION_PLATFORM_CDP_URL=http://127.0.0.1:9222"',
         'set "AUTOMATION_PLATFORM_CDP_PORT=9222"',
+        ('set "PATH={0};{1};%PATH%"' -f $pythonScripts,$pythonDir),
         ('if not exist "{0}" (' -f $entry),
         '  echo [ERROR] Dynamic Conversation Exporter is not installed.',
         '  pause',
@@ -149,8 +234,9 @@ function Write-RootLauncher([string]$Target){
         'exit /b %ERRORLEVEL%'
     )
     $lines | Set-Content -Encoding ASCII $launcher
-    $launcher
+    return $launcher
 }
+
 function Sync-EmbeddedIntegration($Remote,[string]$Target,[string]$Id){
     if(-not $Remote.ui){
         Action $Id 'UI_SKIP' 'Remote manifest has no ui contract.'
@@ -160,21 +246,22 @@ function Sync-EmbeddedIntegration($Remote,[string]$Target,[string]$Id){
         Action $Id 'UI_SKIP' "UI mode=$($Remote.ui.mode)"
         return $null
     }
+
     $uiApi = [int]$Remote.ui.ui_api
     if($uiApi -gt 1){ throw "Module $Id requires unsupported embedded UI API $uiApi." }
     $source = [string]$Remote.ui.source
     $installedFile = [string]$Remote.ui.installed_file
     if(-not $installedFile){ $installedFile = $source }
     if(-not $source){ throw "Embedded UI source is missing in module manifest." }
-    $manifestUrl = [string]$Remote._manifest_url
-    $sourceUrl = Resolve-RawUrl $manifestUrl $source
+
+    $sourceUrl = Resolve-RawUrl ([string]$Remote._manifest_url) $source
     $dest = Join-Path $Target $installedFile
     Action $Id 'UI_SYNC' "$source -> $dest"
     Download $sourceUrl $dest
 
     $python = Join-Path $Root 'runtime\python\python.exe'
-    & $python -m py_compile $dest 2>&1 | ForEach-Object { Log ("[ui-py_compile] " + [string]$_) }
-    if($LASTEXITCODE -ne 0){ throw "Embedded UI Python syntax validation failed for $Id." }
+    $compileRc = Invoke-NativeLogged -FilePath $python -Arguments @('-m','py_compile',$dest) -Prefix 'ui-py_compile'
+    if($compileRc -ne 0){ throw "Embedded UI Python syntax validation failed for $Id." }
 
     $integration = [ordered]@{
         schema_version=1
@@ -198,6 +285,7 @@ function Sync-EmbeddedIntegration($Remote,[string]$Target,[string]$Id){
     Action $Id 'UI_OK' "Embedded UI registered: $integrationPath"
     return $integrationPath
 }
+
 function Get-ModulePackage($Remote,[string]$Id){
     $version = [string]$Remote.version
     $package = Join-Path $downloadsDir ("{0}-{1}.zip" -f $Id,$version)
@@ -257,6 +345,7 @@ function Get-ModulePackage($Remote,[string]$Id){
 
     throw "Module package verification failed after retry. ExpectedSize=$expectedSize ExpectedSHA=$expectedHash"
 }
+
 function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall){
     $id = [string]$Definition.id
     $target = Join-Path $Root ([string]$Definition.install_directory)
@@ -273,12 +362,15 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
     $remote | Add-Member -NotePropertyName '_manifest_url' -NotePropertyValue $manifestUrl -Force
     $expectedVersion = [string]$remote.version
     $required = @($remote.required_files)
+    $imports = @($remote.dependency_imports)
+    if($imports.Count -eq 0){ $imports = @('playwright','markdownify','pyvda') }
+
     $healthy = $installed -and (Test-RequiredFiles $target $required)
     $need = (-not $installed) -or (-not $healthy) -or ($installedVersion -ne $expectedVersion)
 
     if(-not $need){
         Action $id 'SKIP' "Already current and healthy. Version=$installedVersion"
-        Ensure-Requirements $id (Join-Path $Root 'runtime\python\python.exe') (Join-Path $target ([string]$remote.requirements))
+        Ensure-Requirements $id (Join-Path $Root 'runtime\python\python.exe') (Join-Path $target ([string]$remote.requirements)) $imports
         $integration = Sync-EmbeddedIntegration $remote $target $id
         $launcher = Write-RootLauncher $target
         return [ordered]@{id=$id;status='ok';action='SKIP';installed=$true;version=$installedVersion;expected_version=$expectedVersion;path=$target;launcher=$launcher;integration=$integration;ui_mode=[string]$remote.ui.mode}
@@ -301,7 +393,21 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
         Remove-Item -Force $package -ErrorAction SilentlyContinue
         throw "Module package archive is invalid: $($_.Exception.Message)"
     }
-    if(-not(Test-RequiredFiles $stage $required)){ throw "Staged module is incomplete; required files are missing." }
+    if(-not(Test-RequiredFiles $stage $required)){
+        Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+        throw "Staged module is incomplete; required files are missing."
+    }
+
+    # Dependency verification happens before replacing the active module folder.
+    # A pip warning or dependency failure therefore cannot leave a half-installed
+    # module in modules\dynamic_conversation_exporter.
+    try {
+        Ensure-Requirements $id (Join-Path $Root 'runtime\python\python.exe') (Join-Path $stage ([string]$remote.requirements)) $imports
+    } catch {
+        Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+        Action $id 'DEPENDENCIES_FAILED' 'Active module directory was not replaced.'
+        throw
+    }
 
     if($installed){ Copy-Preserved $target $backup @($remote.preserve_on_update) }
     if(Test-Path $target){ Move-Item -Force $target $rollback }
@@ -312,7 +418,6 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
         if(-not(Test-RequiredFiles $target $required)){ throw "Installed module verification failed." }
         $finalVersion = Get-InstalledVersion $target
         if($finalVersion -ne $expectedVersion){ throw "Installed module version mismatch. Expected=$expectedVersion Actual=$finalVersion" }
-        Ensure-Requirements $id (Join-Path $Root 'runtime\python\python.exe') (Join-Path $target ([string]$remote.requirements))
         $integration = Sync-EmbeddedIntegration $remote $target $id
         $launcher = Write-RootLauncher $target
         Remove-Item -Recurse -Force $rollback,$backup -ErrorAction SilentlyContinue
@@ -323,7 +428,7 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
     }
 
     Action $id 'OK' "Version=$expectedVersion Path=$target Launcher=$launcher Integration=$integration"
-    [ordered]@{id=$id;status='ok';action=$action;installed=$true;version=$expectedVersion;expected_version=$expectedVersion;path=$target;launcher=$launcher;integration=$integration;ui_mode=[string]$remote.ui.mode}
+    return [ordered]@{id=$id;status='ok';action=$action;installed=$true;version=$expectedVersion;expected_version=$expectedVersion;path=$target;launcher=$launcher;integration=$integration;ui_mode=[string]$remote.ui.mode}
 }
 
 try {
@@ -339,14 +444,32 @@ try {
         Log "No dynamic_conversation_exporter definition exists in platform manifest." "WARN"
     }
 
-    $summary = [ordered]@{schema_version=2;generated_at=(Get-Date).ToString('o');manager_version=$ManagerVersion;modules=$results}
+    $summary = [ordered]@{
+        schema_version=3
+        generated_at=(Get-Date).ToString('o')
+        manager_version=$ManagerVersion
+        overall_status='ok'
+        modules=$results
+    }
     $summary | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 $statusPath
     Log "Status file: $statusPath"
     Copy-Item -Force $logFile $latestLog
     exit 0
 } catch {
-    Log "FATAL: $($_.Exception.Message)" "ERROR"
+    $errorText = $_.Exception.Message
+    Log "FATAL: $errorText" "ERROR"
     try { Log $_.ScriptStackTrace "ERROR" } catch {}
+    try {
+        $failure = [ordered]@{
+            schema_version=3
+            generated_at=(Get-Date).ToString('o')
+            manager_version=$ManagerVersion
+            overall_status='error'
+            error=$errorText
+            modules=@()
+        }
+        $failure | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 $statusPath
+    } catch {}
     try { Copy-Item -Force $logFile $latestLog } catch {}
     exit 1
 }
