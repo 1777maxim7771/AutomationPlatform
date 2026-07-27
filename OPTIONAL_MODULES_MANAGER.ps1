@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ManagerVersion = "2026.07.27.2"
+$ManagerVersion = "2026.07.27.3"
 
 $Root = $Root.Trim().Trim([char]0x22,[char]0x27).TrimEnd('\','/').Trim()
 if(-not $Root){ throw "Root path is empty." }
@@ -129,7 +129,11 @@ function Write-RootLauncher([string]$Target){
     $lines = @(
         '@echo off',
         'setlocal EnableExtensions',
-        ('cd /d "{0}"' -f $Root),
+        ('set "AUTOMATION_PLATFORM_ROOT={0}"' -f $Root),
+        ('set "AUTOMATION_PLATFORM_PYTHON={0}"' -f (Join-Path $Root 'runtime\python\python.exe')),
+        ('set "AUTOMATION_PLATFORM_PROFILE={0}"' -f (Join-Path $Root 'browser\Chrome_Profile')),
+        'set "AUTOMATION_PLATFORM_CDP_URL=http://127.0.0.1:9222"',
+        'set "AUTOMATION_PLATFORM_CDP_PORT=9222"',
         ('if not exist "{0}" (' -f $entry),
         '  echo [ERROR] Dynamic Conversation Exporter is not installed.',
         '  pause',
@@ -140,6 +144,53 @@ function Write-RootLauncher([string]$Target){
     )
     $lines | Set-Content -Encoding ASCII $launcher
     $launcher
+}
+function Sync-EmbeddedIntegration($Remote,[string]$Target,[string]$Id){
+    if(-not $Remote.ui){
+        Action $Id 'UI_SKIP' 'Remote manifest has no ui contract.'
+        return $null
+    }
+    if(([string]$Remote.ui.mode) -ne 'embedded'){
+        Action $Id 'UI_SKIP' "UI mode=$($Remote.ui.mode)"
+        return $null
+    }
+    $uiApi = [int]$Remote.ui.ui_api
+    if($uiApi -gt 1){ throw "Module $Id requires unsupported embedded UI API $uiApi." }
+    $source = [string]$Remote.ui.source
+    $installedFile = [string]$Remote.ui.installed_file
+    if(-not $installedFile){ $installedFile = $source }
+    if(-not $source){ throw "Embedded UI source is missing in module manifest." }
+    $manifestUrl = [string]$Remote._manifest_url
+    $sourceUrl = Resolve-RawUrl $manifestUrl $source
+    $dest = Join-Path $Target $installedFile
+    Action $Id 'UI_SYNC' "$source -> $dest"
+    Download $sourceUrl $dest
+
+    $python = Join-Path $Root 'runtime\python\python.exe'
+    & $python -m py_compile $dest 2>&1 | ForEach-Object { Log ("[ui-py_compile] " + [string]$_) }
+    if($LASTEXITCODE -ne 0){ throw "Embedded UI Python syntax validation failed for $Id." }
+
+    $integration = [ordered]@{
+        schema_version=1
+        module_id=$Id
+        name=[string]$Remote.name
+        version=[string]$Remote.version
+        integration_revision=[int]$Remote.integration_revision
+        repository=[string]$Remote.repository
+        ui_mode='embedded'
+        ui_api=$uiApi
+        ui_file=$installedFile
+        entry_class=[string]$Remote.ui.entry_class
+        menu_label=[string]$Remote.ui.menu_label
+        menu_group=[string]$Remote.ui.menu_group
+        cache_view=[bool]$Remote.ui.cache_view
+        single_window=$true
+        synced_at=(Get-Date).ToString('o')
+    }
+    $integrationPath = Join-Path $Target 'platform_integration.json'
+    $integration | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $integrationPath
+    Action $Id 'UI_OK' "Embedded UI registered: $integrationPath"
+    return $integrationPath
 }
 function Get-ModulePackage($Remote,[string]$Id){
     $version = [string]$Remote.version
@@ -160,11 +211,7 @@ function Get-ModulePackage($Remote,[string]$Id){
     $i = 0
     foreach($part in $parts){
         $i++
-        $url = Resolve-RawUrl ([string]$Remote.repository + '/blob/main/module_manifest.json') ([string]$part)
-        # Resolve against the real manifest URL when possible. GitHub blob URL above is only a fallback base.
-        if($Remote.PSObject.Properties.Name -contains '_manifest_url'){
-            $url = Resolve-RawUrl ([string]$Remote._manifest_url) ([string]$part)
-        }
+        $url = Resolve-RawUrl ([string]$Remote._manifest_url) ([string]$part)
         $partFile = Join-Path $downloadsDir ("{0}-{1}-part{2:D2}.b64" -f $Id,$version,$i)
         Action $Id 'DOWNLOAD' "Package part $i/$($parts.Count)"
         Download $url $partFile
@@ -195,7 +242,6 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
 
     $manifestUrl = [string]$Definition.manifest_url
     $remote = Get-Json $manifestUrl
-    # Add a local helper property used only by this manager to resolve package_parts.
     $remote | Add-Member -NotePropertyName '_manifest_url' -NotePropertyValue $manifestUrl -Force
     $expectedVersion = [string]$remote.version
     $required = @($remote.required_files)
@@ -205,8 +251,9 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
     if(-not $need){
         Action $id 'SKIP' "Already current and healthy. Version=$installedVersion"
         Ensure-Requirements $id (Join-Path $Root 'runtime\python\python.exe') (Join-Path $target ([string]$remote.requirements))
+        $integration = Sync-EmbeddedIntegration $remote $target $id
         $launcher = Write-RootLauncher $target
-        return [ordered]@{id=$id;status='ok';action='SKIP';installed=$true;version=$installedVersion;expected_version=$expectedVersion;path=$target;launcher=$launcher}
+        return [ordered]@{id=$id;status='ok';action='SKIP';installed=$true;version=$installedVersion;expected_version=$expectedVersion;path=$target;launcher=$launcher;integration=$integration;ui_mode=[string]$remote.ui.mode}
     }
 
     $action = if(-not $installed){'INSTALL'}elseif(-not $healthy){'REPAIR'}else{'UPDATE'}
@@ -231,6 +278,7 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
         $finalVersion = Get-InstalledVersion $target
         if($finalVersion -ne $expectedVersion){ throw "Installed module version mismatch. Expected=$expectedVersion Actual=$finalVersion" }
         Ensure-Requirements $id (Join-Path $Root 'runtime\python\python.exe') (Join-Path $target ([string]$remote.requirements))
+        $integration = Sync-EmbeddedIntegration $remote $target $id
         $launcher = Write-RootLauncher $target
         Remove-Item -Recurse -Force $rollback,$backup -ErrorAction SilentlyContinue
     } catch {
@@ -239,8 +287,8 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
         throw
     }
 
-    Action $id 'OK' "Version=$expectedVersion Path=$target Launcher=$launcher"
-    [ordered]@{id=$id;status='ok';action=$action;installed=$true;version=$expectedVersion;expected_version=$expectedVersion;path=$target;launcher=$launcher}
+    Action $id 'OK' "Version=$expectedVersion Path=$target Launcher=$launcher Integration=$integration"
+    [ordered]@{id=$id;status='ok';action=$action;installed=$true;version=$expectedVersion;expected_version=$expectedVersion;path=$target;launcher=$launcher;integration=$integration;ui_mode=[string]$remote.ui.mode}
 }
 
 try {
@@ -256,7 +304,7 @@ try {
         Log "No dynamic_conversation_exporter definition exists in platform manifest." "WARN"
     }
 
-    $summary = [ordered]@{schema_version=1;generated_at=(Get-Date).ToString('o');manager_version=$ManagerVersion;modules=$results}
+    $summary = [ordered]@{schema_version=2;generated_at=(Get-Date).ToString('o');manager_version=$ManagerVersion;modules=$results}
     $summary | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 $statusPath
     Log "Status file: $statusPath"
     Copy-Item -Force $logFile $latestLog
