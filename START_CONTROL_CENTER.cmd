@@ -1,5 +1,5 @@
 @echo off
-REM AutomationPlatform START_CONTROL_CENTER.cmd v20260726f
+REM AutomationPlatform START_CONTROL_CENTER.cmd v20260727-shell1
 setlocal EnableExtensions
 cd /d "%~dp0"
 
@@ -13,14 +13,11 @@ set "LOGDIR=%ROOT%\logs"
 set "INSTALLERDIR=%ROOT%\installer"
 set "REPAIR=%INSTALLERDIR%\REPAIR_PYTHON_RUNTIME.ps1"
 set "PYTHON_RUNTIME=%ROOT%\runtime\python\python.exe"
+set "SHELL_ENTRY=%CC_DIR%\shell.py"
+
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 if not exist "%INSTALLERDIR%" mkdir "%INSTALLERDIR%"
-
-echo ============================================================
-echo  AutomationPlatform - Control Center  [v20260726f]
-echo ============================================================
-echo  Root: %ROOT%
-echo.
+if not exist "%CC_DIR%" mkdir "%CC_DIR%"
 
 set "PYTHON="
 if exist "%CONFIG%" (
@@ -39,66 +36,26 @@ if not exist "%PYTHON%" (
   exit /b 1
 )
 
-echo  Python : %PYTHON%
-"%PYTHON%" --version 2>nul
-
-REM -----------------------------------------------------------------
-REM Control Center GUI requires tkinter. REPAIR and PYTHON_RUNTIME are
-REM defined BEFORE this IF block so classic CMD percent expansion cannot
-REM turn the PowerShell -File parameter into an empty string.
-REM -----------------------------------------------------------------
 "%PYTHON%" -c "import tkinter" >nul 2>&1
 if errorlevel 1 (
-  echo.
   echo [REPAIR] tkinter is missing from the local Python runtime.
-
   if not exist "%REPAIR%" (
-    echo [REPAIR] Local repair helper not found. Downloading it from GitHub...
     powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-      "$ErrorActionPreference='Stop'; "^
-      "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; "^
-      "$u='https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/REPAIR_PYTHON_RUNTIME.ps1?nocache=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); "^
-      "Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%REPAIR%'"
-
-    if errorlevel 1 (
-      echo [ERROR] Could not download Python repair script from GitHub.
-      echo         Check internet access and try UPDATE_PLATFORM.cmd
-      pause
-      exit /b 1
-    )
-  ) else (
-    echo [REPAIR] Using cached helper: %REPAIR%
+      "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/REPAIR_PYTHON_RUNTIME.ps1?nocache=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%REPAIR%'"
   )
-
-  echo [REPAIR] Repair script: %REPAIR%
-  echo [REPAIR] Reinstalling project-local Python with Tcl/Tk...
+  if not exist "%REPAIR%" (
+    echo [ERROR] Python repair helper is unavailable.
+    pause
+    exit /b 1
+  )
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPAIR%" -Root "%ROOT%"
   if errorlevel 1 (
-    echo [ERROR] Automatic Python/tkinter repair failed.
-    echo         See: %LOGDIR%
+    echo [ERROR] Python/tkinter repair failed. See %LOGDIR%
     pause
     exit /b 1
   )
-
-  if not exist "%PYTHON_RUNTIME%" (
-    echo [ERROR] Python runtime is missing after repair: %PYTHON_RUNTIME%
-    pause
-    exit /b 1
-  )
-
-  "%PYTHON_RUNTIME%" -c "import tkinter" >nul 2>&1
-  if errorlevel 1 (
-    echo [ERROR] tkinter is still unavailable after repair.
-    echo         See: %LOGDIR%
-    pause
-    exit /b 1
-  )
-
-  echo [OK] tkinter repaired successfully.
-  echo.
 )
 
-REM Prefer the repaired project-local runtime when it exists.
 if exist "%PYTHON_RUNTIME%" set "PYTHON=%PYTHON_RUNTIME%"
 
 set "CHROME="
@@ -114,29 +71,48 @@ if not defined CHROME (
   pause
   exit /b 1
 )
-echo  Chrome : %CHROME%
 if not exist "%PROFILE%" mkdir "%PROFILE%"
+
+REM Refresh the small modular shell on every Control Center start.
+REM If GitHub is temporarily unavailable, a previously cached shell is used.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/CONTROL_CENTER_SHELL.py?nocache=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%SHELL_ENTRY%'" >nul 2>&1
+if errorlevel 1 (
+  if exist "%SHELL_ENTRY%" (
+    echo [WARN] Could not refresh Modular Shell; using cached shell.py
+  ) else (
+    echo [WARN] Modular Shell is unavailable; falling back to legacy GUI.
+  )
+)
+
+if exist "%SHELL_ENTRY%" (
+  "%PYTHON%" -m py_compile "%SHELL_ENTRY%" >nul 2>&1
+  if errorlevel 1 (
+    echo [WARN] shell.py validation failed; falling back to legacy GUI.
+    set "ENTRY="
+  ) else (
+    set "ENTRY=%SHELL_ENTRY%"
+  )
+)
+
+if not defined ENTRY if exist "%CC_DIR%\gui.py" set "ENTRY=%CC_DIR%\gui.py"
+if not defined ENTRY if exist "%CC_DIR%\automation_cli.py" set "ENTRY=%CC_DIR%\automation_cli.py"
+if not defined ENTRY if exist "%CC_DIR%\main.py" set "ENTRY=%CC_DIR%\main.py"
+if not defined ENTRY if exist "%CC_DIR%\app.py" set "ENTRY=%CC_DIR%\app.py"
+
+if not defined ENTRY (
+  echo [ERROR] No Control Center entry script found.
+  pause
+  exit /b 1
+)
+
+echo ============================================================
+echo  AutomationPlatform - Modular Control Center
+ echo ============================================================
+echo  Root   : %ROOT%
+echo  Python : %PYTHON%
+echo  Chrome : %CHROME%
 echo  Profile: %PROFILE%
-
-if not exist "%CC_DIR%" (
-  echo [ERROR] Missing folder: control_center
-  pause
-  exit /b 1
-)
-
-set "ENTRY=%CC_DIR%\gui.py"
-if not exist "%ENTRY%" set "ENTRY=%CC_DIR%\automation_cli.py"
-if not exist "%ENTRY%" set "ENTRY=%CC_DIR%\main.py"
-if not exist "%ENTRY%" set "ENTRY=%CC_DIR%\app.py"
-
-if not exist "%ENTRY%" (
-  echo [ERROR] No entry script in control_center
-  echo Expected: gui.py
-  dir /b "%CC_DIR%" 2>nul
-  pause
-  exit /b 1
-)
-
 echo  Entry  : %ENTRY%
 echo ============================================================
 echo.
@@ -146,12 +122,15 @@ set "AUTOMATION_PLATFORM_ROOT=%ROOT%"
 set "AUTOMATION_PLATFORM_CONFIG=%CONFIG%"
 set "AUTOMATION_PLATFORM_CHROME=%CHROME%"
 set "AUTOMATION_PLATFORM_PROFILE=%PROFILE%"
+set "AUTOMATION_PLATFORM_PYTHON=%PYTHON%"
+set "AUTOMATION_PLATFORM_CDP_URL=http://127.0.0.1:9222"
+set "AUTOMATION_PLATFORM_CDP_PORT=9222"
 
 "%PYTHON%" "%ENTRY%"
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" (
   echo.
-  echo [ERROR] Exit code %RC%  - see %LOGDIR%
+  echo [ERROR] Exit code %RC% - see %LOGDIR%
   pause
   exit /b %RC%
 )
