@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$FinalizerVersion = "2026.07.27.3"
+$FinalizerVersion = "2026.07.27.4"
 
 $Root = $Root.Trim().Trim([char]0x22,[char]0x27).TrimEnd('\','/').Trim()
 if (-not $Root) { throw "Root path is empty." }
@@ -37,14 +37,42 @@ function RawBase([string]$Url) {
     if($idx -lt 0){throw "Cannot resolve repository raw base."}
     return "$($u.Scheme)://$($u.Host)$($u.AbsolutePath.Substring(0,$idx+1))"
 }
+function Add-CacheBuster([string]$Url){
+    $sep=if($Url -match '\?'){'&'}else{'?'}
+    return ("{0}{1}nocache={2}" -f $Url,$sep,[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+}
 function Download([string]$Url,[string]$Dest) {
     New-Item -ItemType Directory -Force -Path (Split-Path $Dest -Parent) | Out-Null
-    $sep=if($Url -match '\?'){'&'}else{'?'}
-    $fetch=if($Url -match 'raw\.githubusercontent\.com'){"$Url$sep`nocache=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"}else{$Url}
+    $fetch=if($Url -match 'raw\.githubusercontent\.com'){Add-CacheBuster $Url}else{$Url}
     Log "DOWNLOAD $fetch"
     Invoke-WebRequest -UseBasicParsing -Uri $fetch -OutFile $Dest
     if(-not(Test-Path $Dest)){throw "Download failed: $Url"}
-    Log ("DOWNLOADED {0} bytes -> {1}" -f (Get-Item $Dest).Length,$Dest)
+    $size=(Get-Item $Dest).Length
+    if($size -le 0){throw "Downloaded file is empty: $Url"}
+    Log ("DOWNLOADED {0} bytes -> {1}" -f $size,$Dest)
+}
+function Invoke-NativeLogged([string]$FilePath,[object[]]$Arguments,[string]$Prefix,[switch]$Quiet){
+    $oldPreference=$ErrorActionPreference
+    $captured=@()
+    $rc=1
+    try{
+        $ErrorActionPreference='Continue'
+        $captured=@(& $FilePath @Arguments 2>&1)
+        $rc=[int]$LASTEXITCODE
+    }catch{
+        $captured += $_.Exception.Message
+        $rc=1
+    }finally{
+        $ErrorActionPreference=$oldPreference
+    }
+    if(-not $Quiet){
+        foreach($item in @($captured)){
+            if($null -eq $item){continue}
+            $text=([string]$item).TrimEnd()
+            if($text){Log ("[{0}] {1}" -f $Prefix,$text)}
+        }
+    }
+    return $rc
 }
 function Find-Chrome {
     $c=@((Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),(Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'),(Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe'))
@@ -66,9 +94,6 @@ function Repair-ControlCenterGui([string]$GuiPath,[string]$PythonExe,[string]$Ex
 
     $block = $m.Value
     $changed = $false
-    # Tkinter itself owns widget._w (Tcl command path). The old visual button
-    # accidentally reused _w for pixel width, turning commands into names such
-    # as '195'. Only patch the FXButton block when that bad assignment exists.
     if($block -match 'self\._w\s*=\s*width') {
         $block = [regex]::Replace($block,'self\._w\b','self._fx_w')
         $changed = $true
@@ -82,7 +107,6 @@ function Repair-ControlCenterGui([string]$GuiPath,[string]$PythonExe,[string]$Ex
     if($changed) {
         $text = $text.Substring(0,$m.Index) + $block + $text.Substring($m.Index+$m.Length)
     }
-    # Keep the visible title/version aligned with the manifest build.
     if($ExpectedVersion) {
         $text = $text.Replace('v0.5.0',('v'+$ExpectedVersion))
         $text = $text.Replace('"0.5.0"',('"'+$ExpectedVersion+'"'))
@@ -95,15 +119,15 @@ function Repair-ControlCenterGui([string]$GuiPath,[string]$PythonExe,[string]$Ex
     if(-not $vm.Success){throw "FXButton disappeared after GUI repair."}
     if($vm.Value -match 'self\._w\s*=\s*width'){throw "FXButton repair failed: Tkinter reserved self._w is still overwritten."}
 
-    & $PythonExe -m py_compile $GuiPath 2>&1 | ForEach-Object { Log ("[py_compile] "+[string]$_) }
-    if($LASTEXITCODE -ne 0){throw "Control Center gui.py failed Python syntax validation after repair."}
+    $compileRc=Invoke-NativeLogged -FilePath $PythonExe -Arguments @('-m','py_compile',$GuiPath) -Prefix 'py_compile'
+    if($compileRc -ne 0){throw "Control Center gui.py failed Python syntax validation after repair."}
     Action "CONTROL_CENTER" "VALIDATE" "gui.py compiled successfully; FXButton Tkinter collision absent"
 }
 
 try {
     Log "Root=$Root"
     Log "Manifest=$ManifestUrl"
-    $manifest=Invoke-RestMethod -Uri ($ManifestUrl+"?nocache=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())")
+    $manifest=Invoke-RestMethod -Uri (Add-CacheBuster $ManifestUrl)
     $rawBase=RawBase $ManifestUrl
 
     $pythonExe=Join-Path $Root "runtime\python\python.exe"
@@ -162,13 +186,11 @@ try {
         Action "CONTROL_CENTER" "OK" "Version=$installedCc"
     } else { Action "CONTROL_CENTER" "SKIP" "Program files already present. Version=$installedCc" }
 
-    # Always run compatibility repair, even after SKIP, so an already-installed
-    # broken GUI from an earlier package is repaired on the next self-update.
     Repair-ControlCenterGui -GuiPath $ccGui -PythonExe $pythonExe -ExpectedVersion $expectedCc
 
     Action "LAUNCHERS" "REFRESH" "Refreshing dynamic launchers and installer helpers from GitHub"
     $rootScripts=@('START_CHROME_DEBUG.cmd','START_CONTROL_CENTER.cmd','UPDATE_PLATFORM.cmd')
-    $installerScripts=@('INSTALLER_UI.ps1','BOOTSTRAP_RUNNER.ps1','START_PLATFORM_INSTALLER.ps1','PYTHON_RUNTIME_MANAGER.ps1','CHROME_RUNTIME_MANAGER.ps1','PLATFORM_FINALIZER.ps1','INSTALLER_CORE.ps1','START_INSTALLER_GUI.cmd','REPAIR_PYTHON_RUNTIME.ps1','INSTALL_AutomationPlatform.ps1')
+    $installerScripts=@('INSTALLER_UI.ps1','BOOTSTRAP_RUNNER.ps1','START_PLATFORM_INSTALLER.ps1','PYTHON_RUNTIME_MANAGER.ps1','CHROME_RUNTIME_MANAGER.ps1','PLATFORM_FINALIZER.ps1','OPTIONAL_MODULES_MANAGER.ps1','INSTALLER_CORE.ps1','START_INSTALLER_GUI.cmd','REPAIR_PYTHON_RUNTIME.ps1','INSTALL_AutomationPlatform.ps1')
     foreach($name in $rootScripts){Download ($rawBase+$name) (Join-Path $Root $name);Log "Deployed root entry: $name"}
     foreach($name in $installerScripts){Download ($rawBase+$name) (Join-Path $installerDir $name);Log "Deployed installer helper: $name"}
     $rootBat=Join-Path $Root 'INSTALL_AutomationPlatform.bat'
