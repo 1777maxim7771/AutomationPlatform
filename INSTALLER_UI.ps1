@@ -75,7 +75,9 @@ function Get-LocalState([string]$Root) {
     if(Test-Path $py){try{$pv=(& $py -c "import sys;print('.'.join(map(str,sys.version_info[:3])))" 2>$null|Select-Object -First 1);& $py -c "import tkinter;import pip" 2>$null;$pyOk=($LASTEXITCODE -eq 0)}catch{}}
     $ch=Find-Chrome;$cv='not installed';if($ch){try{$cv=([string](Get-Item $ch).VersionInfo.ProductVersion).Trim()}catch{}}
     $cc='not installed';$cfg=Join-Path $Root 'config\platform.json';if(Test-Path $cfg){try{$cc=[string]((Get-Content -Raw -Encoding UTF8 $cfg|ConvertFrom-Json).control_center_version)}catch{}}
-    return @{Python=$pv;PythonOk=$pyOk;Chrome=$cv;ChromeOk=[bool]$ch;CC=$cc;CCOk=($cc -ne 'not installed')}
+    $dcePath=Join-Path $Root 'modules\dynamic_conversation_exporter\module.json';$dce=$null
+    if(Test-Path $dcePath){try{$dce=[string]((Get-Content -Raw -Encoding UTF8 $dcePath|ConvertFrom-Json).version)}catch{$dce='installed'}}
+    return @{Python=$pv;PythonOk=$pyOk;Chrome=$cv;ChromeOk=[bool]$ch;CC=$cc;CCOk=($cc -ne 'not installed');DCE=$dce;DCEInstalled=[bool]$dce}
 }
 function Tail([string]$Path,[int]$Count=18){if(Test-Path $Path){return((Get-Content -Path $Path -Tail $Count -ErrorAction SilentlyContinue)-join "`r`n")};return "Waiting for live bootstrap log..."}
 function Set-Card($Panel,$Dot,$Value,[string]$State){
@@ -88,8 +90,8 @@ function Set-Card($Panel,$Dot,$Value,[string]$State){
 
 $form=New-Object System.Windows.Forms.Form
 $form.Text='AutomationPlatform - Smart Install / Update / Repair'
-$form.Size=New-Object System.Drawing.Size(980,690)
-$form.MinimumSize=New-Object System.Drawing.Size(900,640)
+$form.Size=New-Object System.Drawing.Size(980,760)
+$form.MinimumSize=New-Object System.Drawing.Size(900,700)
 $form.StartPosition='CenterScreen'
 $form.BackColor=[Drawing.Color]::FromArgb(10,17,26)
 $form.ForeColor=[Drawing.Color]::White
@@ -106,12 +108,17 @@ $txtRoot=New-Object Windows.Forms.TextBox;$txtRoot.Text=$DefaultRoot.Trim().Trim
 $btnAdvanced=New-Object APGlowButton;$btnAdvanced.Text='ADVANCED';$btnAdvanced.Size=New-Object Drawing.Size(124,38);$btnAdvanced.Location=New-Object Drawing.Point(694,141);$btnAdvanced.Anchor='Top,Right';$btnAdvanced.BaseColor=[Drawing.Color]::FromArgb(42,79,112);$btnAdvanced.HoverColor=[Drawing.Color]::FromArgb(65,119,166);$btnAdvanced.EdgeColor=[Drawing.Color]::FromArgb(100,184,245);$form.Controls.Add($btnAdvanced)
 $btnRefresh=New-Object APGlowButton;$btnRefresh.Text='RESCAN';$btnRefresh.Size=New-Object Drawing.Size(116,38);$btnRefresh.Location=New-Object Drawing.Point(826,141);$btnRefresh.Anchor='Top,Right';$btnRefresh.BaseColor=[Drawing.Color]::FromArgb(42,79,112);$btnRefresh.HoverColor=[Drawing.Color]::FromArgb(65,119,166);$btnRefresh.EdgeColor=[Drawing.Color]::FromArgb(100,184,245);$form.Controls.Add($btnRefresh)
 
-$advanced=New-Object Windows.Forms.Panel;$advanced.Location=New-Object Drawing.Point(28,181);$advanced.Size=New-Object Drawing.Size(914,52);$advanced.Anchor='Top,Left,Right';$advanced.Visible=$false;$advanced.BackColor=[Drawing.Color]::FromArgb(16,28,40);$form.Controls.Add($advanced)
+$modulePanel=New-Object Windows.Forms.Panel;$modulePanel.Location=New-Object Drawing.Point(28,190);$modulePanel.Size=New-Object Drawing.Size(914,50);$modulePanel.Anchor='Top,Left,Right';$modulePanel.BackColor=[Drawing.Color]::FromArgb(17,32,45);$form.Controls.Add($modulePanel)
+$moduleLabel=New-Object Windows.Forms.Label;$moduleLabel.Text='OPTIONAL MODULE';$moduleLabel.Font=New-Object Drawing.Font('Segoe UI Semibold',9);$moduleLabel.ForeColor=[Drawing.Color]::FromArgb(93,219,240);$moduleLabel.AutoSize=$true;$moduleLabel.Location=New-Object Drawing.Point(12,7);$modulePanel.Controls.Add($moduleLabel)
+$chkDce=New-Object Windows.Forms.CheckBox;$chkDce.Text='Dynamic Conversation Exporter v1.5  -  ChatGPT / Chrome CDP exporter';$chkDce.AutoSize=$true;$chkDce.Location=New-Object Drawing.Point(12,25);$chkDce.ForeColor=[Drawing.Color]::FromArgb(225,239,246);$chkDce.BackColor=$modulePanel.BackColor;$modulePanel.Controls.Add($chkDce)
+$dceState=New-Object Windows.Forms.Label;$dceState.Text='optional - not installed';$dceState.AutoSize=$true;$dceState.Anchor='Top,Right';$dceState.Location=New-Object Drawing.Point(710,26);$dceState.ForeColor=[Drawing.Color]::FromArgb(170,192,207);$modulePanel.Controls.Add($dceState)
+
+$advanced=New-Object Windows.Forms.Panel;$advanced.Location=New-Object Drawing.Point(28,246);$advanced.Size=New-Object Drawing.Size(914,52);$advanced.Anchor='Top,Left,Right';$advanced.Visible=$false;$advanced.BackColor=[Drawing.Color]::FromArgb(16,28,40);$form.Controls.Add($advanced)
 $manifestLabel=New-Object Windows.Forms.Label;$manifestLabel.Text='GitHub Manifest';$manifestLabel.AutoSize=$true;$manifestLabel.Location=New-Object Drawing.Point(10,5);$advanced.Controls.Add($manifestLabel)
 $txtManifest=New-Object Windows.Forms.TextBox;$txtManifest.Text=$ManifestUrl;$txtManifest.Location=New-Object Drawing.Point(10,25);$txtManifest.Size=New-Object Drawing.Size(890,24);$txtManifest.Anchor='Top,Left,Right';$advanced.Controls.Add($txtManifest)
 
 function New-StatusCard([int]$X,[string]$Name){
-    $p=New-Object Windows.Forms.Panel;$p.Size=New-Object Drawing.Size(286,70);$p.Location=New-Object Drawing.Point($X,246);$p.BackColor=[Drawing.Color]::FromArgb(25,38,51);$form.Controls.Add($p)
+    $p=New-Object Windows.Forms.Panel;$p.Size=New-Object Drawing.Size(286,70);$p.Location=New-Object Drawing.Point($X,310);$p.BackColor=[Drawing.Color]::FromArgb(25,38,51);$form.Controls.Add($p)
     $d=New-Object Windows.Forms.Panel;$d.Size=New-Object Drawing.Size(12,12);$d.Location=New-Object Drawing.Point(14,16);$d.BackColor=[Drawing.Color]::FromArgb(80,145,185);$p.Controls.Add($d)
     $n=New-Object Windows.Forms.Label;$n.Text=$Name;$n.Font=New-Object Drawing.Font('Segoe UI Semibold',10);$n.AutoSize=$true;$n.Location=New-Object Drawing.Point(34,11);$p.Controls.Add($n)
     $v=New-Object Windows.Forms.Label;$v.Text='checking...';$v.ForeColor=[Drawing.Color]::FromArgb(170,192,207);$v.AutoSize=$true;$v.Location=New-Object Drawing.Point(14,40);$p.Controls.Add($v)
@@ -119,15 +126,15 @@ function New-StatusCard([int]$X,[string]$Name){
 }
 $pyCard=New-StatusCard 28 'PYTHON RUNTIME';$chCard=New-StatusCard 337 'GOOGLE CHROME';$ccCard=New-StatusCard 646 'CONTROL CENTER'
 
-$progressOuter=New-Object Windows.Forms.Panel;$progressOuter.Location=New-Object Drawing.Point(28,332);$progressOuter.Size=New-Object Drawing.Size(914,16);$progressOuter.Anchor='Top,Left,Right';$progressOuter.BackColor=[Drawing.Color]::FromArgb(28,41,53);$form.Controls.Add($progressOuter)
+$progressOuter=New-Object Windows.Forms.Panel;$progressOuter.Location=New-Object Drawing.Point(28,396);$progressOuter.Size=New-Object Drawing.Size(914,16);$progressOuter.Anchor='Top,Left,Right';$progressOuter.BackColor=[Drawing.Color]::FromArgb(28,41,53);$form.Controls.Add($progressOuter)
 $progressFill=New-Object Windows.Forms.Panel;$progressFill.Location=New-Object Drawing.Point(0,0);$progressFill.Size=New-Object Drawing.Size(2,16);$progressFill.BackColor=[Drawing.Color]::FromArgb(72,224,185);$progressOuter.Controls.Add($progressFill)
-$phase=New-Object Windows.Forms.Label;$phase.Text='Ready - local health scan';$phase.AutoSize=$true;$phase.Location=New-Object Drawing.Point(28,357);$phase.ForeColor=[Drawing.Color]::FromArgb(170,192,207);$form.Controls.Add($phase)
+$phase=New-Object Windows.Forms.Label;$phase.Text='Ready - local health scan';$phase.AutoSize=$true;$phase.Location=New-Object Drawing.Point(28,421);$phase.ForeColor=[Drawing.Color]::FromArgb(170,192,207);$form.Controls.Add($phase)
 
-$logBox=New-Object Windows.Forms.TextBox;$logBox.Multiline=$true;$logBox.ReadOnly=$true;$logBox.ScrollBars='Vertical';$logBox.WordWrap=$false;$logBox.Font=New-Object Drawing.Font('Consolas',9);$logBox.BackColor=[Drawing.Color]::FromArgb(6,12,18);$logBox.ForeColor=[Drawing.Color]::FromArgb(183,214,226);$logBox.Location=New-Object Drawing.Point(28,387);$logBox.Size=New-Object Drawing.Size(914,178);$logBox.Anchor='Top,Bottom,Left,Right';$logBox.Text='Live bootstrap output will appear here.';$form.Controls.Add($logBox)
+$logBox=New-Object Windows.Forms.TextBox;$logBox.Multiline=$true;$logBox.ReadOnly=$true;$logBox.ScrollBars='Vertical';$logBox.WordWrap=$false;$logBox.Font=New-Object Drawing.Font('Consolas',9);$logBox.BackColor=[Drawing.Color]::FromArgb(6,12,18);$logBox.ForeColor=[Drawing.Color]::FromArgb(183,214,226);$logBox.Location=New-Object Drawing.Point(28,451);$logBox.Size=New-Object Drawing.Size(914,178);$logBox.Anchor='Top,Bottom,Left,Right';$logBox.Text='Live bootstrap output will appear here.';$form.Controls.Add($logBox)
 
-$btnLogs=New-Object APGlowButton;$btnLogs.Text='OPEN LOGS';$btnLogs.Size=New-Object Drawing.Size(140,44);$btnLogs.Location=New-Object Drawing.Point(28,590);$btnLogs.Anchor='Bottom,Left';$btnLogs.BaseColor=[Drawing.Color]::FromArgb(43,74,101);$btnLogs.HoverColor=[Drawing.Color]::FromArgb(62,111,151);$btnLogs.EdgeColor=[Drawing.Color]::FromArgb(110,184,235);$form.Controls.Add($btnLogs)
-$btnInstall=New-Object APGlowButton;$btnInstall.Text='INSTALL / UPDATE / REPAIR';$btnInstall.Size=New-Object Drawing.Size(320,52);$btnInstall.Location=New-Object Drawing.Point(622,584);$btnInstall.Anchor='Bottom,Right';$btnInstall.Font=New-Object Drawing.Font('Segoe UI Semibold',10);$form.Controls.Add($btnInstall)
-$status=New-Object Windows.Forms.Label;$status.Text='READY';$status.AutoSize=$true;$status.Location=New-Object Drawing.Point(185,604);$status.Anchor='Bottom,Left';$status.ForeColor=[Drawing.Color]::FromArgb(91,229,192);$form.Controls.Add($status)
+$btnLogs=New-Object APGlowButton;$btnLogs.Text='OPEN LOGS';$btnLogs.Size=New-Object Drawing.Size(140,44);$btnLogs.Location=New-Object Drawing.Point(28,654);$btnLogs.Anchor='Bottom,Left';$btnLogs.BaseColor=[Drawing.Color]::FromArgb(43,74,101);$btnLogs.HoverColor=[Drawing.Color]::FromArgb(62,111,151);$btnLogs.EdgeColor=[Drawing.Color]::FromArgb(110,184,235);$form.Controls.Add($btnLogs)
+$btnInstall=New-Object APGlowButton;$btnInstall.Text='INSTALL / UPDATE / REPAIR';$btnInstall.Size=New-Object Drawing.Size(320,52);$btnInstall.Location=New-Object Drawing.Point(622,648);$btnInstall.Anchor='Bottom,Right';$btnInstall.Font=New-Object Drawing.Font('Segoe UI Semibold',10);$form.Controls.Add($btnInstall)
+$status=New-Object Windows.Forms.Label;$status.Text='READY';$status.AutoSize=$true;$status.Location=New-Object Drawing.Point(185,668);$status.Anchor='Bottom,Left';$status.ForeColor=[Drawing.Color]::FromArgb(91,229,192);$form.Controls.Add($status)
 
 function Update-LocalCards {
     $root=$txtRoot.Text.Trim().Trim([char]0x22,[char]0x27).TrimEnd('\','/')
@@ -135,17 +142,21 @@ function Update-LocalCards {
     if($s.PythonOk){Set-Card $pyCard[0] $pyCard[1] $pyCard[2] "OK  $($s.Python)"}else{Set-Card $pyCard[0] $pyCard[1] $pyCard[2] $s.Python}
     if($s.ChromeOk){Set-Card $chCard[0] $chCard[1] $chCard[2] "OK  $($s.Chrome)"}else{Set-Card $chCard[0] $chCard[1] $chCard[2] $s.Chrome}
     if($s.CCOk){Set-Card $ccCard[0] $ccCard[1] $ccCard[2] "OK  v$($s.CC)"}else{Set-Card $ccCard[0] $ccCard[1] $ccCard[2] $s.CC}
+    if($s.DCEInstalled){$chkDce.Checked=$true;$dceState.Text="INSTALLED  v$($s.DCE)  - auto-update";$dceState.ForeColor=[Drawing.Color]::FromArgb(91,229,192)}else{$dceState.Text='OPTIONAL - not installed';$dceState.ForeColor=[Drawing.Color]::FromArgb(170,192,207)}
 }
 function Set-Progress([int]$Pct){$pct=[Math]::Max(0,[Math]::Min(100,$Pct));$w=[int](($progressOuter.ClientSize.Width*$pct)/100);if($w -lt 2){$w=2};$progressFill.Width=$w}
 function Parse-Live([string]$Text){
-    if($Text -match 'PHASE 1/4'){Set-Progress 18;$phase.Text='PHASE 1/4  |  Python runtime'}
-    if($Text -match 'PHASE 2/4'){Set-Progress 38;$phase.Text='PHASE 2/4  |  Chrome runtime'}
-    if($Text -match 'PHASE 3/4'){Set-Progress 58;$phase.Text='PHASE 3/4  |  Control Center package'}
-    if($Text -match 'PHASE 4/4'){Set-Progress 76;$phase.Text='PHASE 4/4  |  Finalize platform'}
+    if($Text -match 'PHASE 1/5'){Set-Progress 15;$phase.Text='PHASE 1/5  |  Python runtime'}
+    if($Text -match 'PHASE 2/5'){Set-Progress 32;$phase.Text='PHASE 2/5  |  Chrome runtime'}
+    if($Text -match 'PHASE 3/5'){Set-Progress 50;$phase.Text='PHASE 3/5  |  Control Center package'}
+    if($Text -match 'PHASE 4/5'){Set-Progress 68;$phase.Text='PHASE 4/5  |  Finalize platform'}
+    if($Text -match 'PHASE 5/5'){Set-Progress 84;$phase.Text='PHASE 5/5  |  Optional modules'}
     if($Text -match '\[PYTHON\]\[(SKIP|OK|PREVERIFIED)\]'){Set-Card $pyCard[0] $pyCard[1] $pyCard[2] 'OK / SKIP'}
     if($Text -match '\[CHROME\]\[(SKIP|OK|PREVERIFIED)\]'){Set-Card $chCard[0] $chCard[1] $chCard[2] 'OK / SKIP'}
     if($Text -match '\[CHROME\]\[(DEFER_UPDATE|UPDATE_FAILED_USING_EXISTING)\]'){Set-Card $chCard[0] $chCard[1] $chCard[2] 'WARN / DEFER'}
     if($Text -match '\[CONTROL_CENTER\]\[(OK|SKIP)\]'){Set-Card $ccCard[0] $ccCard[1] $ccCard[2] 'OK / CURRENT'}
+    if($Text -match '\[MODULE:dynamic_conversation_exporter\]\[(INSTALL|UPDATE|REPAIR)\]'){$dceState.Text='INSTALLING / UPDATING...';$dceState.ForeColor=[Drawing.Color]::FromArgb(255,198,78)}
+    if($Text -match '\[MODULE:dynamic_conversation_exporter\]\[OK\]'){$dceState.Text='INSTALLED / READY';$dceState.ForeColor=[Drawing.Color]::FromArgb(91,229,192)}
     if($Text -match 'Bootstrap completed successfully'){Set-Progress 100;$phase.Text='COMPLETE  |  Health check passed'}
     if($Text -match 'FATAL:'){$phase.Text='ERROR  |  See live diagnostics';$phase.ForeColor=[Drawing.Color]::FromArgb(255,100,100)}
 }
@@ -174,7 +185,9 @@ $btnInstall.Add_Click({
         New-Item -ItemType Directory -Force -Path $root,(Join-Path $root 'logs')|Out-Null
         $tempDir=Join-Path $env:TEMP 'AutomationPlatform_Bootstrap';$runner=Join-Path $tempDir 'BOOTSTRAP_RUNNER.ps1'
         $status.Text='SYNCING GITHUB';$phase.Text='Downloading latest bootstrap engine...';Set-Progress 5;$form.Refresh();Download-Runner $runner
-        $psi=New-Object System.Diagnostics.ProcessStartInfo;$psi.FileName='powershell.exe';$psi.Arguments="-NoProfile -ExecutionPolicy Bypass -File `"$runner`" -Root `"$root`" -ManifestUrl `"$manifest`"";$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.WorkingDirectory=$root
+        $args="-NoProfile -ExecutionPolicy Bypass -File `"$runner`" -Root `"$root`" -ManifestUrl `"$manifest`""
+        if($chkDce.Checked){$args += ' -InstallDynamicConversationExporter'}
+        $psi=New-Object System.Diagnostics.ProcessStartInfo;$psi.FileName='powershell.exe';$psi.Arguments=$args;$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.WorkingDirectory=$root
         $script:Proc=New-Object System.Diagnostics.Process;$script:Proc.StartInfo=$psi;[void]$script:Proc.Start()
         $btnInstall.Enabled=$false;$btnInstall.Text='WORKING...';$status.Text='RUNNING';$status.ForeColor=[Drawing.Color]::FromArgb(255,198,78);$phase.ForeColor=[Drawing.Color]::FromArgb(170,192,207);$timer.Start()
     }catch{$status.Text='ERROR';$status.ForeColor=[Drawing.Color]::FromArgb(255,100,100);[Windows.Forms.MessageBox]::Show($_.Exception.Message,'AutomationPlatform error',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Error)|Out-Null}
