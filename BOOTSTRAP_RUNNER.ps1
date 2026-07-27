@@ -30,24 +30,43 @@ function Log([string]$Text,[string]$Level="INFO"){
     Add-Content -Encoding UTF8 -Path $logFile -Value $line
     Add-Content -Encoding UTF8 -Path $latestLog -Value $line
 }
-function Download([string]$Url,[string]$Dest){
+function Add-CacheBuster([string]$Url){
     $sep=if($Url -match '\?'){'&'}else{'?'}
-    $fetchUrl="$Url$sep`nocache=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+    return ("{0}{1}nocache={2}" -f $Url,$sep,[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+}
+function Download([string]$Url,[string]$Dest){
+    $fetchUrl=Add-CacheBuster $Url
     Log "DOWNLOAD $fetchUrl"
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Dest)|Out-Null
     Invoke-WebRequest -UseBasicParsing -Uri $fetchUrl -OutFile $Dest
     if(-not(Test-Path $Dest)){throw "Download failed: $Url"}
-    Log ("DOWNLOADED {0} bytes -> {1}" -f (Get-Item $Dest).Length,$Dest)
+    $size=(Get-Item $Dest).Length
+    if($size -le 0){throw "Downloaded file is empty: $Url"}
+    Log ("DOWNLOADED {0} bytes -> {1}" -f $size,$Dest)
 }
 function Run-LoggedPowerShell([string]$Prefix,[string[]]$Arguments){
-    & powershell.exe @Arguments 2>&1|ForEach-Object{
-        $text=[string]$_
+    $oldPreference=$ErrorActionPreference
+    $captured=@()
+    $rc=1
+    try{
+        $ErrorActionPreference='Continue'
+        $captured=@(& powershell.exe @Arguments 2>&1)
+        $rc=[int]$LASTEXITCODE
+    }catch{
+        $captured += $_.Exception.Message
+        $rc=1
+    }finally{
+        $ErrorActionPreference=$oldPreference
+    }
+    foreach($item in @($captured)){
+        if($null -eq $item){continue}
+        $text=[string]$item
         Write-Host $text
         $line="[$Prefix] $text"
         Add-Content -Encoding UTF8 -Path $logFile -Value $line
         Add-Content -Encoding UTF8 -Path $latestLog -Value $line
     }
-    return $LASTEXITCODE
+    return $rc
 }
 function Prepare-ControlCenterPackage($Manifest){
     $encoding="binary";try{if($Manifest.control_center.encoding){$encoding=[string]$Manifest.control_center.encoding}}catch{}
