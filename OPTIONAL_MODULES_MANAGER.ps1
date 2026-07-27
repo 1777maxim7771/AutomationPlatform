@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$ManagerVersion = "2026.07.27.5"
+$ManagerVersion = "2026.07.27.6"
 
 $Root = $Root.Trim().Trim([char]0x22,[char]0x27).TrimEnd('\','/').Trim()
 if(-not $Root){ throw "Root path is empty." }
@@ -56,9 +56,7 @@ function Resolve-RawUrl([string]$BaseUrl,[string]$Relative){
     (New-Object System.Uri([Uri]$BaseUrl,([string]$Relative).Replace('\','/'))).AbsoluteUri
 }
 function Read-JsonFile([string]$Path){
-    if(Test-Path $Path){
-        try { return (Get-Content -Raw -Encoding UTF8 $Path | ConvertFrom-Json) } catch { return $null }
-    }
+    if(Test-Path $Path){ try { return (Get-Content -Raw -Encoding UTF8 $Path | ConvertFrom-Json) } catch { return $null } }
     return $null
 }
 function Get-InstalledVersion([string]$Target){
@@ -73,11 +71,8 @@ function Test-RequiredFiles([string]$Base,$Required){
     return $true
 }
 
-# Native tools such as pip legitimately write warnings to STDERR even when they
-# exit with code 0. Windows PowerShell 5.1 converts STDERR records into
-# NativeCommandError objects; with global ErrorActionPreference=Stop that can
-# incorrectly abort the installer. This wrapper treats the native exit code as
-# authoritative and only logs STDERR/STDOUT as text.
+# Windows PowerShell 5.1 turns native STDERR into NativeCommandError records.
+# Native exit code is therefore authoritative; warnings on STDERR are logged only.
 function Invoke-NativeLogged(
     [string]$FilePath,
     [object[]]$Arguments,
@@ -87,7 +82,6 @@ function Invoke-NativeLogged(
     if(-not(Test-Path $FilePath) -and $FilePath -notmatch '^[A-Za-z0-9_.-]+$'){
         throw "Native executable is missing: $FilePath"
     }
-
     $oldPreference = $ErrorActionPreference
     $captured = @()
     $exitCode = 1
@@ -101,7 +95,6 @@ function Invoke-NativeLogged(
     } finally {
         $ErrorActionPreference = $oldPreference
     }
-
     if(-not $Quiet){
         foreach($item in @($captured)){
             if($null -eq $item){ continue }
@@ -112,13 +105,73 @@ function Invoke-NativeLogged(
     return $exitCode
 }
 
-function Test-ModuleImports([string]$PythonExe,$Imports){
+function Test-DependencyImports([string]$PythonExe,$Imports){
     if(-not(Test-Path $PythonExe)){ return $false }
     $names = @($Imports | Where-Object { $_ -and ([string]$_).Trim() })
     if($names.Count -eq 0){ return $true }
     $code = (($names | ForEach-Object { "import " + ([string]$_).Trim() }) -join '; ')
-    $rc = Invoke-NativeLogged -FilePath $PythonExe -Arguments @('-c',$code) -Prefix 'import-check' -Quiet
+    $rc = Invoke-NativeLogged -FilePath $PythonExe -Arguments @('-c',$code) -Prefix 'dependency-import' -Quiet
     return ($rc -eq 0)
+}
+
+function Test-ModuleSourceIntegrity(
+    [string]$Id,
+    [string]$Base,
+    [string]$PythonExe,
+    $ImportModules,
+    [switch]$SkipImports
+){
+    Action $Id 'SOURCE_VALIDATE' "Base=$Base SkipImports=$([bool]$SkipImports)"
+    if(-not(Test-Path $Base)){
+        Action $Id 'SOURCE_INVALID' "Module directory is missing: $Base"
+        return $false
+    }
+    if(-not(Test-Path $PythonExe)){
+        Action $Id 'SOURCE_INVALID' "Platform Python is missing: $PythonExe"
+        return $false
+    }
+
+    $pythonFiles = @(Get-ChildItem -Path $Base -Filter '*.py' -File -Recurse -ErrorAction SilentlyContinue)
+    if($pythonFiles.Count -eq 0){
+        Action $Id 'SOURCE_INVALID' 'No Python source files found.'
+        return $false
+    }
+
+    foreach($file in $pythonFiles){
+        try {
+            $bytes = [IO.File]::ReadAllBytes($file.FullName)
+            if($bytes -contains [byte]0){
+                Action $Id 'SOURCE_INVALID' "NUL byte detected: $($file.FullName)"
+                return $false
+            }
+        } catch {
+            Action $Id 'SOURCE_INVALID' "Cannot read source file: $($file.FullName) :: $($_.Exception.Message)"
+            return $false
+        }
+    }
+
+    $compileRc = Invoke-NativeLogged -FilePath $PythonExe -Arguments @('-m','compileall','-q',$Base) -Prefix 'source-compile'
+    if($compileRc -ne 0){
+        Action $Id 'SOURCE_INVALID' "compileall failed. exit=$compileRc"
+        return $false
+    }
+
+    if(-not $SkipImports){
+        $names = @($ImportModules | Where-Object { $_ -and ([string]$_).Trim() })
+        if($names.Count -gt 0){
+            $escaped = $Base.Replace('\','\\').Replace("'","\\'")
+            $imports = (($names | ForEach-Object { "import " + ([string]$_).Trim() }) -join '; ')
+            $code = "import sys; sys.path.insert(0, r'$escaped'); $imports"
+            $importRc = Invoke-NativeLogged -FilePath $PythonExe -Arguments @('-c',$code) -Prefix 'source-import'
+            if($importRc -ne 0){
+                Action $Id 'SOURCE_INVALID' "Module source import validation failed. exit=$importRc"
+                return $false
+            }
+        }
+    }
+
+    Action $Id 'SOURCE_OK' "Python sources valid: files=$($pythonFiles.Count)"
+    return $true
 }
 
 function Save-DependencyState([string]$Id,[string]$Hash){
@@ -146,7 +199,7 @@ function Ensure-Requirements([string]$Id,[string]$PythonExe,[string]$Requirement
     $oldHash = $null
     try { $oldHash = [string]$state.$Id.requirements_sha256 } catch {}
 
-    $importsOk = Test-ModuleImports $PythonExe $Imports
+    $importsOk = Test-DependencyImports $PythonExe $Imports
     if($importsOk -and $oldHash -eq $hash){
         $checkRc = Invoke-NativeLogged -FilePath $PythonExe -Arguments @('-m','pip','check') -Prefix 'pip-check' -Quiet
         if($checkRc -eq 0){
@@ -157,27 +210,12 @@ function Ensure-Requirements([string]$Id,[string]$PythonExe,[string]$Requirement
     }
 
     Action $Id 'DEPENDENCIES_INSTALL' "Installing requirements with platform-local Python. hash=$hash"
-    $pipArgs = @(
-        '-m','pip','install',
-        '--disable-pip-version-check',
-        '--no-warn-script-location',
-        '--upgrade-strategy','only-if-needed',
-        '-r',$RequirementsPath
-    )
+    $pipArgs = @('-m','pip','install','--disable-pip-version-check','--no-warn-script-location','--upgrade-strategy','only-if-needed','-r',$RequirementsPath)
     $pipRc = Invoke-NativeLogged -FilePath $PythonExe -Arguments $pipArgs -Prefix 'pip'
-    if($pipRc -ne 0){
-        throw "Python requirements installation failed for module $Id. pip exit code=$pipRc"
-    }
-
-    if(-not(Test-ModuleImports $PythonExe $Imports)){
-        throw "Module Python dependency import verification failed after pip install."
-    }
-
+    if($pipRc -ne 0){ throw "Python requirements installation failed for module $Id. pip exit code=$pipRc" }
+    if(-not(Test-DependencyImports $PythonExe $Imports)){ throw "Module dependency import verification failed after pip install." }
     $checkRc = Invoke-NativeLogged -FilePath $PythonExe -Arguments @('-m','pip','check') -Prefix 'pip-check'
-    if($checkRc -ne 0){
-        throw "Python dependency conflict detected after installing module $Id. pip check exit code=$checkRc"
-    }
-
+    if($checkRc -ne 0){ throw "Python dependency conflict detected after installing module $Id. pip check exit code=$checkRc" }
     Save-DependencyState $Id $hash
     Action $Id 'DEPENDENCIES_OK' 'Requirements installed; imports and pip check are healthy.'
 }
@@ -210,10 +248,11 @@ function Restore-Preserved([string]$Backup,[string]$Target,$Items){
 
 function Write-RootLauncher([string]$Target){
     $launcher = Join-Path $Root 'START_DYNAMIC_CONVERSATION_EXPORTER.cmd'
-    $entry = Join-Path $Target '00_START_ALL.cmd'
     $pythonDir = Join-Path $Root 'runtime\python'
     $pythonExe = Join-Path $pythonDir 'python.exe'
     $pythonScripts = Join-Path $pythonDir 'Scripts'
+    $main = Join-Path $Target 'main.py'
+    $chromeLauncher = Join-Path $Root 'START_CHROME_DEBUG.cmd'
     $lines = @(
         '@echo off',
         'setlocal EnableExtensions',
@@ -225,12 +264,14 @@ function Write-RootLauncher([string]$Target){
         'set "AUTOMATION_PLATFORM_CDP_URL=http://127.0.0.1:9222"',
         'set "AUTOMATION_PLATFORM_CDP_PORT=9222"',
         ('set "PATH={0};{1};%PATH%"' -f $pythonScripts,$pythonDir),
-        ('if not exist "{0}" (' -f $entry),
+        ('if not exist "{0}" (' -f $main),
         '  echo [ERROR] Dynamic Conversation Exporter is not installed.',
         '  pause',
         '  exit /b 1',
         ')',
-        ('call "{0}"' -f $entry),
+        ('if exist "{0}" call "{0}" https://chatgpt.com/ >nul 2>&1' -f $chromeLauncher),
+        ('cd /d "{0}"' -f $Target),
+        ('"{0}" "{1}" --cdp "http://127.0.0.1:9222"' -f $pythonExe,$main),
         'exit /b %ERRORLEVEL%'
     )
     $lines | Set-Content -Encoding ASCII $launcher
@@ -238,15 +279,8 @@ function Write-RootLauncher([string]$Target){
 }
 
 function Sync-EmbeddedIntegration($Remote,[string]$Target,[string]$Id){
-    if(-not $Remote.ui){
-        Action $Id 'UI_SKIP' 'Remote manifest has no ui contract.'
-        return $null
-    }
-    if(([string]$Remote.ui.mode) -ne 'embedded'){
-        Action $Id 'UI_SKIP' "UI mode=$($Remote.ui.mode)"
-        return $null
-    }
-
+    if(-not $Remote.ui){ Action $Id 'UI_SKIP' 'Remote manifest has no ui contract.'; return $null }
+    if(([string]$Remote.ui.mode) -ne 'embedded'){ Action $Id 'UI_SKIP' "UI mode=$($Remote.ui.mode)"; return $null }
     $uiApi = [int]$Remote.ui.ui_api
     if($uiApi -gt 1){ throw "Module $Id requires unsupported embedded UI API $uiApi." }
     $source = [string]$Remote.ui.source
@@ -306,7 +340,6 @@ function Get-ModulePackage($Remote,[string]$Id){
 
     $parts = @($Remote.package_parts)
     if($parts.Count -lt 1){ throw "Module manifest has no package_parts." }
-
     for($attempt=1; $attempt -le 2; $attempt++){
         $builder = New-Object System.Text.StringBuilder
         $i = 0
@@ -321,7 +354,6 @@ function Get-ModulePackage($Remote,[string]$Id){
             if([string]::IsNullOrWhiteSpace($partText)){ throw "Downloaded package part is empty: $part" }
             [void]$builder.Append($partText)
         }
-
         try { [IO.File]::WriteAllBytes($package,[Convert]::FromBase64String($builder.ToString())) }
         catch { throw "Could not decode module package: $($_.Exception.Message)" }
 
@@ -329,20 +361,11 @@ function Get-ModulePackage($Remote,[string]$Id){
         $actualHash = (Get-FileHash -Algorithm SHA256 -Path $package).Hash.ToLowerInvariant()
         $sizeOk = ($expectedSize -le 0) -or ($actualSize -eq $expectedSize)
         $hashOk = (-not $expectedHash) -or ($actualHash -eq $expectedHash)
-
-        if($sizeOk -and $hashOk){
-            Action $Id 'PACKAGE_OK' "Size=$actualSize SHA-256=$actualHash"
-            return $package
-        }
-
+        if($sizeOk -and $hashOk){ Action $Id 'PACKAGE_OK' "Size=$actualSize SHA-256=$actualHash"; return $package }
         Action $Id 'PACKAGE_VERIFY_FAILED' "Attempt=$attempt ExpectedSize=$expectedSize ActualSize=$actualSize ExpectedSHA=$expectedHash ActualSHA=$actualHash"
         Remove-Item -Force $package -ErrorAction SilentlyContinue
-        if($attempt -lt 2){
-            Action $Id 'PACKAGE_RETRY' 'Verification failed; re-downloading every package part once.'
-            Start-Sleep -Milliseconds 350
-        }
+        if($attempt -lt 2){ Action $Id 'PACKAGE_RETRY' 'Verification failed; re-downloading every package part once.'; Start-Sleep -Milliseconds 350 }
     }
-
     throw "Module package verification failed after retry. ExpectedSize=$expectedSize ExpectedSHA=$expectedHash"
 }
 
@@ -362,22 +385,29 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
     $remote | Add-Member -NotePropertyName '_manifest_url' -NotePropertyValue $manifestUrl -Force
     $expectedVersion = [string]$remote.version
     $required = @($remote.required_files)
-    $imports = @($remote.dependency_imports)
-    if($imports.Count -eq 0){ $imports = @('playwright','markdownify','pyvda') }
+    $dependencyImports = @($remote.dependency_imports)
+    if($dependencyImports.Count -eq 0){ $dependencyImports = @('playwright','markdownify','pyvda') }
+    $sourceImports = @($remote.source_validation.import_modules)
+    if($sourceImports.Count -eq 0){ $sourceImports = @('chatgpt_exporter.app','chatgpt_exporter.floating_panel','chatgpt_exporter.i18n','chatgpt_exporter.storage','embedded_panel') }
+    $python = Join-Path $Root 'runtime\python\python.exe'
 
-    $healthy = $installed -and (Test-RequiredFiles $target $required)
+    $filesHealthy = $installed -and (Test-RequiredFiles $target $required)
+    $sourceHealthy = $false
+    if($filesHealthy){ $sourceHealthy = Test-ModuleSourceIntegrity $id $target $python $sourceImports }
+    $healthy = $filesHealthy -and $sourceHealthy
     $need = (-not $installed) -or (-not $healthy) -or ($installedVersion -ne $expectedVersion)
 
     if(-not $need){
-        Action $id 'SKIP' "Already current and healthy. Version=$installedVersion"
-        Ensure-Requirements $id (Join-Path $Root 'runtime\python\python.exe') (Join-Path $target ([string]$remote.requirements)) $imports
+        Action $id 'SKIP' "Already current and source-healthy. Version=$installedVersion"
+        Ensure-Requirements $id $python (Join-Path $target ([string]$remote.requirements)) $dependencyImports
         $integration = Sync-EmbeddedIntegration $remote $target $id
+        if(-not(Test-ModuleSourceIntegrity $id $target $python $sourceImports)){ throw "Module became invalid after UI sync." }
         $launcher = Write-RootLauncher $target
         return [ordered]@{id=$id;status='ok';action='SKIP';installed=$true;version=$installedVersion;expected_version=$expectedVersion;path=$target;launcher=$launcher;integration=$integration;ui_mode=[string]$remote.ui.mode}
     }
 
     $action = if(-not $installed){'INSTALL'}elseif(-not $healthy){'REPAIR'}else{'UPDATE'}
-    Action $id $action "Installed=$installedVersion Expected=$expectedVersion Healthy=$healthy"
+    Action $id $action "Installed=$installedVersion Expected=$expectedVersion FilesHealthy=$filesHealthy SourceHealthy=$sourceHealthy"
     $package = Get-ModulePackage $remote $id
 
     $stage = Join-Path $stageRoot ($id + '_new')
@@ -385,10 +415,8 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
     $rollback = Join-Path $stageRoot ($id + '_rollback')
     Remove-Item -Recurse -Force $stage,$rollback -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
-
-    try {
-        Expand-Archive -Path $package -DestinationPath $stage -Force
-    } catch {
+    try { Expand-Archive -Path $package -DestinationPath $stage -Force }
+    catch {
         Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
         Remove-Item -Force $package -ErrorAction SilentlyContinue
         throw "Module package archive is invalid: $($_.Exception.Message)"
@@ -397,12 +425,14 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
         Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
         throw "Staged module is incomplete; required files are missing."
     }
+    if(-not(Test-ModuleSourceIntegrity $id $stage $python $sourceImports -SkipImports)){
+        Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+        throw "Staged module source validation failed before dependency installation."
+    }
 
-    # Dependency verification happens before replacing the active module folder.
-    # A pip warning or dependency failure therefore cannot leave a half-installed
-    # module in modules\dynamic_conversation_exporter.
     try {
-        Ensure-Requirements $id (Join-Path $Root 'runtime\python\python.exe') (Join-Path $stage ([string]$remote.requirements)) $imports
+        Ensure-Requirements $id $python (Join-Path $stage ([string]$remote.requirements)) $dependencyImports
+        if(-not(Test-ModuleSourceIntegrity $id $stage $python $sourceImports)){ throw "Staged module import validation failed after dependency installation." }
     } catch {
         Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
         Action $id 'DEPENDENCIES_FAILED' 'Active module directory was not replaced.'
@@ -411,14 +441,14 @@ function Install-DynamicConversationExporter($Definition,[bool]$ExplicitInstall)
 
     if($installed){ Copy-Preserved $target $backup @($remote.preserve_on_update) }
     if(Test-Path $target){ Move-Item -Force $target $rollback }
-
     try {
         Move-Item -Force $stage $target
         if(Test-Path $backup){ Restore-Preserved $backup $target @($remote.preserve_on_update) }
-        if(-not(Test-RequiredFiles $target $required)){ throw "Installed module verification failed." }
+        if(-not(Test-RequiredFiles $target $required)){ throw "Installed module required-file verification failed." }
         $finalVersion = Get-InstalledVersion $target
         if($finalVersion -ne $expectedVersion){ throw "Installed module version mismatch. Expected=$expectedVersion Actual=$finalVersion" }
         $integration = Sync-EmbeddedIntegration $remote $target $id
+        if(-not(Test-ModuleSourceIntegrity $id $target $python $sourceImports)){ throw "Final module source validation failed after activation/UI sync." }
         $launcher = Write-RootLauncher $target
         Remove-Item -Recurse -Force $rollback,$backup -ErrorAction SilentlyContinue
     } catch {
@@ -435,7 +465,6 @@ try {
     Log "Root=$Root"
     Log "Manifest=$ManifestUrl"
     Log "InstallDynamicConversationExporter=$([bool]$InstallDynamicConversationExporter)"
-
     $platform = Get-Json $ManifestUrl
     $results = @()
     if($platform.optional_modules -and $platform.optional_modules.dynamic_conversation_exporter){
@@ -443,14 +472,7 @@ try {
     } else {
         Log "No dynamic_conversation_exporter definition exists in platform manifest." "WARN"
     }
-
-    $summary = [ordered]@{
-        schema_version=3
-        generated_at=(Get-Date).ToString('o')
-        manager_version=$ManagerVersion
-        overall_status='ok'
-        modules=$results
-    }
+    $summary = [ordered]@{schema_version=4;generated_at=(Get-Date).ToString('o');manager_version=$ManagerVersion;overall_status='ok';modules=$results}
     $summary | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 $statusPath
     Log "Status file: $statusPath"
     Copy-Item -Force $logFile $latestLog
@@ -460,14 +482,7 @@ try {
     Log "FATAL: $errorText" "ERROR"
     try { Log $_.ScriptStackTrace "ERROR" } catch {}
     try {
-        $failure = [ordered]@{
-            schema_version=3
-            generated_at=(Get-Date).ToString('o')
-            manager_version=$ManagerVersion
-            overall_status='error'
-            error=$errorText
-            modules=@()
-        }
+        $failure = [ordered]@{schema_version=4;generated_at=(Get-Date).ToString('o');manager_version=$ManagerVersion;overall_status='error';error=$errorText;modules=@()}
         $failure | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 $statusPath
     } catch {}
     try { Copy-Item -Force $logFile $latestLog } catch {}
