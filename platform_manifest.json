@@ -1,5 +1,5 @@
 {
-  "schema_version": 13,
+  "schema_version": 14,
   "platform_api": 1,
   "platform_name": "AutomationPlatform",
   "repository": {
@@ -102,7 +102,7 @@
     "dynamic_conversation_exporter": {
       "id": "dynamic_conversation_exporter",
       "name": "Dynamic Conversation Exporter",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "repository": "https://github.com/1777maxim7771/Dynamic_Conversation_Exporter",
       "manifest_url": "https://raw.githubusercontent.com/1777maxim7771/Dynamic_Conversation_Exporter/main/module_manifest.json",
       "install_directory": "modules\\dynamic_conversation_exporter",
@@ -111,7 +111,7 @@
       "ui_mode": "embedded",
       "ui_api": 1,
       "single_window": true,
-      "description": "ChatGPT conversation export module using the shared AutomationPlatform Chrome Debug/CDP connection and embedded single-window panel."
+      "description": "ChatGPT Dynamic Conversation Exporter v1.6 with partial-pair and attachment export, using the shared AutomationPlatform Chrome Debug/CDP connection and the original working panel embedded in the single-window shell."
     }
   },
   "defaults": {
