@@ -1,5 +1,5 @@
 @echo off
-REM AutomationPlatform START_CONTROL_CENTER.cmd v20260727-shell1
+REM AutomationPlatform START_CONTROL_CENTER.cmd v20260727-shell2
 setlocal EnableExtensions
 cd /d "%~dp0"
 
@@ -12,6 +12,7 @@ set "CC_DIR=%ROOT%\control_center"
 set "LOGDIR=%ROOT%\logs"
 set "INSTALLERDIR=%ROOT%\installer"
 set "REPAIR=%INSTALLERDIR%\REPAIR_PYTHON_RUNTIME.ps1"
+set "OPTIONAL_MANAGER=%INSTALLERDIR%\OPTIONAL_MODULES_MANAGER.ps1"
 set "PYTHON_RUNTIME=%ROOT%\runtime\python\python.exe"
 set "SHELL_ENTRY=%CC_DIR%\shell.py"
 
@@ -73,15 +74,25 @@ if not defined CHROME (
 )
 if not exist "%PROFILE%" mkdir "%PROFILE%"
 
-REM Refresh the small modular shell on every Control Center start.
-REM If GitHub is temporarily unavailable, a previously cached shell is used.
+REM Refresh small live components on every Control Center start.
+REM Failure is non-fatal when a previous local copy already exists.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/CONTROL_CENTER_SHELL.py?nocache=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%SHELL_ENTRY%'" >nul 2>&1
+  "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $ts=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); $u='https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/CONTROL_CENTER_SHELL.py?nocache=' + $ts; Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%SHELL_ENTRY%'" >nul 2>&1
 if errorlevel 1 (
   if exist "%SHELL_ENTRY%" (
     echo [WARN] Could not refresh Modular Shell; using cached shell.py
   ) else (
     echo [WARN] Modular Shell is unavailable; falling back to legacy GUI.
+  )
+)
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $ts=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); $u='https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/OPTIONAL_MODULES_MANAGER.ps1?nocache=' + $ts; Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%OPTIONAL_MANAGER%'" >nul 2>&1
+if errorlevel 1 (
+  if exist "%OPTIONAL_MANAGER%" (
+    echo [WARN] Could not refresh Optional Modules Manager; using cached copy.
+  ) else (
+    echo [WARN] Optional Modules Manager is unavailable. Module installation will be disabled until UPDATE_PLATFORM.cmd is run.
   )
 )
 
@@ -108,7 +119,7 @@ if not defined ENTRY (
 
 echo ============================================================
 echo  AutomationPlatform - Modular Control Center
- echo ============================================================
+echo ============================================================
 echo  Root   : %ROOT%
 echo  Python : %PYTHON%
 echo  Chrome : %CHROME%
