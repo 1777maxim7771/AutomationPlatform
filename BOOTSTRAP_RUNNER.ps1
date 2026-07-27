@@ -1,6 +1,7 @@
 param(
     [string]$Root = "D:\AutomationPlatform",
     [string]$ManifestUrl = "https://raw.githubusercontent.com/1777maxim7771/AutomationPlatform/main/platform_manifest.json",
+    [switch]$InstallDynamicConversationExporter,
     [switch]$NoLaunch
 )
 
@@ -64,9 +65,6 @@ function Prepare-ControlCenterPackage($Manifest){
         if($cached -eq $expected){Log "CONTROL_CENTER PACKAGE cache valid; download skipped: $zipPath";return}
     }
 
-    # A manifest version may change because of a post-extract compatibility fix
-    # while the immutable source ZIP remains identical. Reuse any cached package
-    # whose SHA-256 matches instead of downloading all Base64 parts again.
     if($expected){
         foreach($candidate in (Get-ChildItem -Path $downloadsDir -Filter 'ControlCenter-*.zip' -File -ErrorAction SilentlyContinue)){
             if($candidate.FullName -eq $zipPath){continue}
@@ -100,12 +98,14 @@ function Prepare-ControlCenterPackage($Manifest){
 Log "Root=$Root"
 Log "Manifest=$ManifestUrl"
 Log "Mode=INSTALL_OR_UPDATE_OR_REPAIR"
+Log "Optional DynamicConversationExporter selected=$([bool]$InstallDynamicConversationExporter)"
 
 try{
     $manifestFile=Join-Path $tempDir "platform_manifest.json"
     $pythonManagerFile=Join-Path $tempDir "PYTHON_RUNTIME_MANAGER.ps1"
     $chromeManagerFile=Join-Path $tempDir "CHROME_RUNTIME_MANAGER.ps1"
     $finalizerFile=Join-Path $tempDir "PLATFORM_FINALIZER.ps1"
+    $optionalManagerFile=Join-Path $tempDir "OPTIONAL_MODULES_MANAGER.ps1"
 
     Log "Fetching latest manifest and component managers from GitHub"
     Download $ManifestUrl $manifestFile
@@ -115,28 +115,36 @@ try{
     Download "$RepoRaw/PYTHON_RUNTIME_MANAGER.ps1" $pythonManagerFile
     Download "$RepoRaw/CHROME_RUNTIME_MANAGER.ps1" $chromeManagerFile
     Download "$RepoRaw/PLATFORM_FINALIZER.ps1" $finalizerFile
+    Download "$RepoRaw/OPTIONAL_MODULES_MANAGER.ps1" $optionalManagerFile
     Copy-Item -Force $pythonManagerFile (Join-Path $installerDir "PYTHON_RUNTIME_MANAGER.ps1")
     Copy-Item -Force $chromeManagerFile (Join-Path $installerDir "CHROME_RUNTIME_MANAGER.ps1")
     Copy-Item -Force $finalizerFile (Join-Path $installerDir "PLATFORM_FINALIZER.ps1")
+    Copy-Item -Force $optionalManagerFile (Join-Path $installerDir "OPTIONAL_MODULES_MANAGER.ps1")
     Copy-Item -Force $manifestFile (Join-Path $installerDir "platform_manifest.json")
 
-    Log "PHASE 1/4 - Python runtime health"
+    Log "PHASE 1/5 - Python runtime health"
     $pyArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$pythonManagerFile,'-Root',$Root,'-ManifestUrl',$ManifestUrl)
     $pyExit=Run-LoggedPowerShell "PYTHON-RUNTIME" $pyArgs
     if($pyExit -ne 0){throw "Python Runtime Manager failed with exit code $pyExit"}
 
-    Log "PHASE 2/4 - Chrome runtime health"
+    Log "PHASE 2/5 - Chrome runtime health"
     $chromeArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$chromeManagerFile,'-Root',$Root,'-ManifestUrl',$ManifestUrl)
     $chromeExit=Run-LoggedPowerShell "CHROME-RUNTIME" $chromeArgs
     if($chromeExit -ne 0){throw "Chrome Runtime Manager failed with exit code $chromeExit"}
 
-    Log "PHASE 3/4 - Control Center package"
+    Log "PHASE 3/5 - Control Center package"
     Prepare-ControlCenterPackage $manifest
 
-    Log "PHASE 4/4 - Platform finalizer"
+    Log "PHASE 4/5 - Platform finalizer"
     $finArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$finalizerFile,'-Root',$Root,'-ManifestUrl',$ManifestUrl)
     $finExit=Run-LoggedPowerShell "FINALIZER" $finArgs
     if($finExit -ne 0){throw "Platform Finalizer failed with exit code $finExit"}
+
+    Log "PHASE 5/5 - Optional modules"
+    $moduleArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$optionalManagerFile,'-Root',$Root,'-ManifestUrl',$ManifestUrl)
+    if($InstallDynamicConversationExporter){$moduleArgs += '-InstallDynamicConversationExporter'}
+    $moduleExit=Run-LoggedPowerShell "OPTIONAL-MODULES" $moduleArgs
+    if($moduleExit -ne 0){throw "Optional Modules Manager failed with exit code $moduleExit"}
 
     $statusPath=Join-Path $Root "data\platform_status.json"
     if(Test-Path $statusPath){
@@ -147,6 +155,13 @@ try{
             Log "Chrome status=$($status.components.chrome.status), action=$($status.components.chrome.action), version=$($status.components.chrome.installed_version)"
             Log "ControlCenter status=$($status.components.control_center.status), action=$($status.components.control_center.action), version=$($status.components.control_center.installed_version)"
         }catch{Log "Could not parse platform_status.json: $($_.Exception.Message)" "WARN"}
+    }
+    $optionalStatus=Join-Path $Root "data\optional_modules_status.json"
+    if(Test-Path $optionalStatus){
+        try{
+            $mods=Get-Content -Raw -Encoding UTF8 $optionalStatus|ConvertFrom-Json
+            foreach($m in @($mods.modules)){Log "OptionalModule id=$($m.id), status=$($m.status), action=$($m.action), version=$($m.version)"}
+        }catch{Log "Could not parse optional_modules_status.json: $($_.Exception.Message)" "WARN"}
     }
 
     Log "Bootstrap completed successfully"
